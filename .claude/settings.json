@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find c:UsersExatoDownloadsprescription-systembackend -not -path */node_modules/* -type f -o -not -path */node_modules/* -type d)",
+      "Bash(find /c/Users/Exato/Downloads/prescription-system/backend-nest/src -type f -name *.ts)",
+      "Bash(npx skills:*)"
+    ]
+  }
+}

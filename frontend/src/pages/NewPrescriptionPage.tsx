@@ -1,0 +1,245 @@
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useForm } from 'react-hook-form'
+import toast from 'react-hot-toast'
+import api from '../services/api'
+import { useAuth } from '../context/AuthContext'
+import AppShell, { NavItem } from '../components/layout/AppShell'
+
+const LANGUAGES = ['Hindi','English','Marathi','Tamil','Telugu','Bengali','Gujarati','Kannada','Punjabi','Odia']
+
+const NAV: NavItem[] = [
+  {
+    id: 'home', label: 'Home', path: '/home',
+    icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+  },
+  {
+    id: 'prescriptions', label: 'Prescriptions', path: '/prescriptions',
+    icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
+  },
+  {
+    id: 'medicines', label: 'Medicine DB', path: '/medicine-prescriptions',
+    icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>,
+  },
+  {
+    id: 'profile', label: 'Profile', path: '/profile',
+    icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+  },
+  {
+    id: 'settings', label: 'Settings', path: '/settings',
+    icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+  },
+]
+
+export default function NewPrescriptionPage() {
+  const { user } = useAuth()
+  const navigate = useNavigate()
+  const [file, setFile] = useState<File | null>(null)
+  const [preview, setPreview] = useState<string | null>(null)
+  const { register, handleSubmit, formState: { isSubmitting, errors } } = useForm<{
+    doctor_name: string
+    patient_name: string
+    patient_phone: string
+    language: string
+    notes: string
+  }>({ defaultValues: { doctor_name: user?.name || '', language: 'Hindi' } })
+
+  useEffect(() => {
+    return () => { if (preview) URL.revokeObjectURL(preview) }
+  }, [preview])
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (!f) return
+    setFile(f)
+    if (f.type.startsWith('image/')) {
+      if (preview) URL.revokeObjectURL(preview)
+      setPreview(URL.createObjectURL(f))
+    } else {
+      if (preview) URL.revokeObjectURL(preview)
+      setPreview(null)
+    }
+  }
+
+  const onSubmit = async (data: any) => {
+    try {
+      const form = new FormData()
+      form.append('patient_name', data.patient_name)
+      form.append('patient_phone', data.patient_phone)
+      form.append('language', data.language)
+      if (data.notes) form.append('notes', data.notes)
+      if (file) form.append('image', file)
+      const res = await api.post('/prescriptions', form, { headers: { 'Content-Type': undefined } })
+      const prescription = res.data.data
+
+      // Save demo interpreted data (replace with real AI service call later)
+      if (prescription?.id) {
+        try {
+          const demoData = {
+            status: 'success',
+            metadata: {
+              language: data.language,
+              patient_name: data.patient_name,
+              patient_phone: data.patient_phone,
+              processed_at: new Date().toISOString(),
+              unique_id: prescription.id.slice(0, 8),
+            },
+            interpreted_data: {
+              patient_details: {
+                name: data.patient_name,
+                phone: data.patient_phone,
+                date: new Date().toLocaleDateString('en-IN'),
+              },
+              doctor_details: {
+                name: '',
+                qualifications: '',
+                contact: '',
+              },
+              hospital_details: {
+                name: '',
+                address: '',
+              },
+              medicines: [
+                {
+                  medicine_name: 'Paracetamol 500mg',
+                  dosage: '1 tablet',
+                  duration: '5 Days',
+                  instructions: 'After food',
+                },
+                {
+                  medicine_name: 'ORS Sachets',
+                  dosage: 'Two sachets',
+                  duration: 'As needed',
+                  instructions: 'Dissolve in water and consume',
+                },
+              ],
+            },
+            raw_extracted_text: '(Demo — connect VITE_AI_SERVICE_URL for real OCR)',
+          }
+          await api.put(`/prescriptions/${prescription.id}/interpreted-data`, demoData)
+        } catch {
+          // non-critical
+        }
+      }
+
+      toast.success('Prescription uploaded!')
+      navigate('/prescriptions')
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Upload failed')
+    }
+  }
+
+  const lbl: React.CSSProperties = { display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--ink-light)', marginBottom: 5 }
+
+  const BackBtn = (
+    <button className="btn btn-ghost btn-sm" onClick={() => navigate(-1)}>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M19 12H5M12 5l-7 7 7 7"/>
+      </svg>
+      Back
+    </button>
+  )
+
+  return (
+    <AppShell navItems={NAV} topBarRight={BackBtn}>
+      <div style={{ maxWidth: 520 }}>
+        <form onSubmit={handleSubmit(onSubmit)} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div className="card" style={{ padding: '22px 22px' }}>
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--ink)', marginBottom: 18 }}>New Prescription</h2>
+
+            {/* Doctor name (read-only) */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={lbl}>Doctor</label>
+              <input className="input-field" readOnly value={user?.name || ''} style={{ background: 'var(--cell)', color: 'var(--ink-light)' }} />
+            </div>
+
+            {/* Patient name */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={lbl}>Patient Name *</label>
+              <input className="input-field" placeholder="Patient full name"
+                {...register('patient_name', { required: 'Patient name is required' })} />
+              {errors.patient_name && <p style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>{errors.patient_name.message as string}</p>}
+            </div>
+
+            {/* Phone */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={lbl}>Patient Mobile *</label>
+              <input className="input-field" type="tel" placeholder="10-digit number"
+                {...register('patient_phone', {
+                  required: 'Phone number is required',
+                  pattern: { value: /^\d{10}$/, message: '10 digit number required' },
+                })} />
+              {errors.patient_phone && <p style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>{errors.patient_phone.message as string}</p>}
+            </div>
+
+            {/* Language */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={lbl}>Language</label>
+              <select className="input-field" {...register('language')}>
+                {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+
+            {/* File upload */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={lbl}>Upload Prescription Image</label>
+              <div style={{
+                border: `2px dashed ${preview ? 'var(--teal)' : 'var(--border)'}`,
+                borderRadius: 12, padding: 16, textAlign: 'center',
+                background: preview ? 'var(--teal-light)' : 'transparent',
+                position: 'relative', transition: 'border-color .15s, background .15s',
+              }}>
+                {preview ? (
+                  <img src={preview} alt="Preview" style={{ maxHeight: 180, margin: '0 auto', borderRadius: 8, objectFit: 'contain', display: 'block' }} />
+                ) : (
+                  <div style={{ padding: '16px 0' }}>
+                    <svg style={{ margin: '0 auto 8px', color: 'var(--ink-light)' }} width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="17 8 12 3 7 8"/>
+                      <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <p style={{ fontSize: 13, color: 'var(--ink-light)', marginBottom: 3 }}>Choose file or drag here</p>
+                    <p style={{ fontSize: 11, color: 'var(--ink-light)', opacity: .6 }}>JPG, PNG, PDF up to 10MB</p>
+                  </div>
+                )}
+                {!preview && (
+                  <input type="file" accept="image/*,.pdf" onChange={handleFile}
+                    style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
+                )}
+              </div>
+              {file && (
+                <p style={{ fontSize: 11, color: 'var(--teal)', marginTop: 5 }}>✓ {file.name}</p>
+              )}
+              {preview && (
+                <button type="button"
+                  onClick={() => { setFile(null); if (preview) URL.revokeObjectURL(preview); setPreview(null) }}
+                  style={{ fontSize: 11, color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', marginTop: 6 }}>
+                  Remove image
+                </button>
+              )}
+            </div>
+
+            {/* Notes */}
+            <div>
+              <label style={lbl}>Doctor's Notes <span style={{ fontWeight: 400 }}>(optional)</span></label>
+              <textarea className="input-field" rows={2} style={{ resize: 'none' }}
+                placeholder="Any additional instructions…" {...register('notes')} />
+            </div>
+          </div>
+
+          <button type="submit" disabled={isSubmitting} className="btn btn-teal"
+            style={{ opacity: isSubmitting ? .65 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            {isSubmitting ? (
+              <>
+                <div style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin .7s linear infinite' }} />
+                Uploading…
+              </>
+            ) : 'Upload Prescription'}
+          </button>
+        </form>
+      </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </AppShell>
+  )
+}
