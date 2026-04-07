@@ -2,12 +2,13 @@
  * HospitalService — Level 2
  * Covers: Hospitals · Hospital Addresses · Staff (doctor/pharmacist profiles)
  */
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { Pool } from 'mysql2/promise';
 import { v4 as uuidv4 } from 'uuid';
 import * as bcrypt from 'bcryptjs';
 import { MYSQL_POOL } from '../../database/database.module';
 import { AppError } from '../../common/errors/app.error';
+import { HospitalRepository } from './hospital.repository';
 
 function slugify(name: string): string {
   return name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-');
@@ -15,7 +16,12 @@ function slugify(name: string): string {
 
 @Injectable()
 export class HospitalService {
-  constructor(@Inject(MYSQL_POOL) private readonly pool: Pool) {}
+  private readonly logger = new Logger(HospitalService.name);
+
+  constructor(
+    @Inject(MYSQL_POOL) private readonly pool: Pool,
+    private readonly hospitalRepository: HospitalRepository,
+  ) {}
 
   // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -62,6 +68,7 @@ export class HospitalService {
     admin_email: string;
     admin_password: string;
   }) {
+    this.logger.log(`[createHospital] orgId=${orgId} name=${dto.name} adminEmail=${dto.admin_email}`);
     await this.assertHospitalLimit(orgId);
 
     // Validate required fields up-front, before touching the DB
@@ -177,6 +184,7 @@ export class HospitalService {
   }
 
   async listHospitals(orgId: string) {
+    this.logger.log(`[listHospitals] orgId=${orgId}`);
     const [rows]: any = await this.pool.execute(
       `SELECT h.*, ha.city, ha.state, ha.pincode, ha.lat, ha.lng, ha.address_line1
        FROM hospitals h

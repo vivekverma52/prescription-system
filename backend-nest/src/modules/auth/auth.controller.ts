@@ -13,6 +13,8 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { SuperadminLoginDto } from './dto/superadmin-login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Cookies } from '../../common/decorators/cookies.decorator';
@@ -89,5 +91,20 @@ export class AuthController {
   async logout(@Cookies('refreshToken') token: string | undefined) {
     if (token) await this.authService.logout(token);
     return null;
+  }
+
+  // ── Password reset ────────────────────────────────────────────────────────
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @HttpMessage('Password reset successfully')
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.email, dto.otp, dto.password);
   }
 }

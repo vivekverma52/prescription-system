@@ -11,6 +11,7 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  Logger,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
@@ -21,15 +22,21 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { S3Service } from '../../common/s3/s3.service';
+import { SqsService } from '../../common/sqs/sqs.service';
 import { AppError } from '../../common/errors/app.error';
+import { ConfigService } from '@nestjs/config';
 
 // ── Prescriptions Controller ──────────────────────────────────────────────────
 
 @Controller('api/prescriptions')
 export class PrescriptionsController {
+  private readonly logger = new Logger(PrescriptionsController.name);
+
   constructor(
     private readonly prescriptionService: PrescriptionService,
     private readonly s3Service: S3Service,
+    private readonly sqsService: SqsService,
+    private readonly configService: ConfigService,
   ) {}
 
   @Post()
@@ -54,24 +61,56 @@ export class PrescriptionsController {
     @UploadedFile() file: Express.Multer.File,
     @Res() res: Response,
   ) {
-    await this.prescriptionService.assertSubscriptionLimit(user.orgId);
+    this.logger.log(`[CREATE] Request by doctor=${user.userId} patient=${body.patient_name}`);
 
-    let imageFile: any = null;
+    this.logger.log(`[SUBSCRIPTION] Checking limit for org=${user.orgId}`);
+    await this.prescriptionService.assertSubscriptionLimit(user.orgId);
+    this.logger.log(`[SUBSCRIPTION] Limit OK`);
+
+    let imageKey: string | null = null;
+    let imageUrl: string | null = null;
     if (file) {
-      const url = await this.s3Service.uploadToS3(file.buffer, file.originalname, file.mimetype);
-      imageFile = { location: url };
+      this.logger.log(`[S3] Uploading image — name=${file.originalname} size=${file.size}B type=${file.mimetype}`);
+      imageKey = await this.s3Service.uploadToS3(file.buffer, file.originalname, file.mimetype);
+      imageUrl = this.s3Service.getObjectUrl(imageKey);
+      this.logger.log(`[S3] Upload complete — key=${imageKey}`);
+      this.logger.log(`[S3] Full S3 URL — ${imageUrl}`);
+    } else {
+      this.logger.log(`[S3] No image attached — skipping upload`);
     }
 
+    // DB always stores the short S3 key (imageKey) — URL is derived on read
+    this.logger.log(`[DB] Creating prescription record — storing image_key=${imageKey}`);
     const prescription = await this.prescriptionService.createPrescription({
       userId: user.userId,
       userName: user.name,
       orgId: user.orgId,
+      hospitalId: user.hospitalId ?? null,
       patient_name: body.patient_name,
       patient_phone: body.patient_phone,
       language: body.language,
       notes: body.notes,
-      imageFile,
+      imageKey,
     });
+    this.logger.log(`[DB] Prescription created — id=${prescription.id} patient_uid=${prescription.patient_uid}`);
+
+    if (imageKey && imageUrl) {
+      const uploadQueueUrl = this.configService.get<string>('SQS_UPLOAD_QUEUE_URL');
+      // DB stores short key (image_key = "prescriptions/prescription-xxx.png")
+      // SQS sends full S3 URL as imageKey so the external service can fetch the image directly
+      this.logger.log(`[SQS] DB image_key = ${imageKey}`);
+      this.logger.log(`[SQS] Sending full S3 URL as imageKey = ${imageUrl}`);
+      this.logger.log(`[SQS] patientId = ${prescription.patient_uid}`);
+      await this.sqsService.sendMessage(uploadQueueUrl, {
+        imageKey: imageUrl,
+        patientId: prescription.patient_uid,
+      });
+      this.logger.log(`[SQS] Message enqueued successfully`);
+    } else {
+      this.logger.log(`[SQS] No image — skipping queue send`);
+    }
+
+    this.logger.log(`[CREATE] Done — prescription=${prescription.id}`);
     return res.status(201).json({ success: true, message: 'Prescription created', data: prescription });
   }
 
@@ -256,8 +295,9 @@ export class MedicinePrescriptionsController {
     @Res() res: Response,
   ) {
     if (!file) throw AppError.badRequest('No image file provided');
-    const url = await this.s3Service.uploadToS3(file.buffer, file.originalname, file.mimetype);
-    const doc = await this.prescriptionService.updateMedicineLibraryImage(id, url);
+    const key = await this.s3Service.uploadToS3(file.buffer, file.originalname, file.mimetype);
+    const imageUrl = this.s3Service.getObjectUrl(key);
+    const doc = await this.prescriptionService.updateMedicineLibraryImage(id, imageUrl);
     return res.status(200).json({ success: true, message: 'Image uploaded', data: doc });
   }
 

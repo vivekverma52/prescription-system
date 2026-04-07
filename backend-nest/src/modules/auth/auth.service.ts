@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import * as jwt from 'jsonwebtoken';
@@ -7,6 +7,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { Pool } from 'mysql2/promise';
 import { MYSQL_POOL } from '../../database/database.module';
 import { AppError } from '../../common/errors/app.error';
+import { MailService } from '../../common/mail/mail.service';
+import { AuthRepository } from './auth.repository';
 
 function slugify(str: string): string {
   return (
@@ -18,6 +20,7 @@ function slugify(str: string): string {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private readonly jwtSecret: string;
   private readonly saSecret: string;
   private readonly jwtExpires: string;
@@ -27,6 +30,8 @@ export class AuthService {
   constructor(
     @Inject(MYSQL_POOL) private readonly pool: Pool,
     private readonly configService: ConfigService,
+    private readonly mailService: MailService,
+    private readonly authRepository: AuthRepository,
   ) {
     this.jwtSecret     = this.configService.get<string>('JWT_SECRET');
     this.saSecret      = this.configService.get<string>('SUPERADMIN_JWT_SECRET');
@@ -77,24 +82,21 @@ export class AuthService {
   // ── Superadmin login ───────────────────────────────────────────────────
 
   async superadminLogin(email: string, password: string) {
+    this.logger.log(`[superadminLogin] attempt email=${email}`);
     if (!email || !password) throw AppError.badRequest('Email and password are required');
 
-    const [rows]: any = await this.pool.execute(
-      'SELECT * FROM superadmins WHERE email = ?',
-      [email.trim().toLowerCase()],
-    );
-    if (rows.length === 0) throw AppError.unauthorized('Invalid credentials');
+    const sa = await this.authRepository.findSuperadminByEmail(email.trim().toLowerCase());
+    if (!sa) { this.logger.warn(`[superadminLogin] not found email=${email}`); throw AppError.unauthorized('Invalid credentials'); }
 
-    const sa = rows[0];
     const valid = await bcrypt.compare(password, sa.password);
-    if (!valid) throw AppError.unauthorized('Invalid credentials');
+    if (!valid) { this.logger.warn(`[superadminLogin] wrong password email=${email}`); throw AppError.unauthorized('Invalid credentials'); }
 
     const token = jwt.sign(
       { type: 'SUPERADMIN', superAdminId: sa.id, name: sa.name, email: sa.email },
       this.saSecret,
       { expiresIn: '1d' },
     );
-
+    this.logger.log(`[superadminLogin] success id=${sa.id}`);
     return { token, superAdmin: { id: sa.id, name: sa.name, email: sa.email } };
   }
 
@@ -102,6 +104,7 @@ export class AuthService {
 
 
   async register(body: any) {
+    this.logger.log(`[register] email=${body.email} role=${body.role}`);
     const { name, email, password, role = 'DOCTOR', clinic_name } = body;
 
     if (!name || !email || !password) throw AppError.badRequest('Name, email and password are required');
@@ -199,8 +202,7 @@ export class AuthService {
       conn.release();
     }
 
-    // Issue tokens after the transaction commits — refresh token is its own
-    // atomic write; if it fails the user still exists and can log in normally.
+    this.logger.log(`[register] user created id=${userId} orgId=${orgId} role=${effectiveRole}`);
     const accessToken  = this.makeAccessToken(
       { id: userId, name: name.trim(), email: normalEmail, role: effectiveRole, custom_role_id: customRoleId },
       orgId,
@@ -222,22 +224,17 @@ export class AuthService {
   // ── Login ──────────────────────────────────────────────────────────────
 
   async login(email: string, password: string) {
+    this.logger.log(`[login] attempt email=${email}`);
     if (!email || !password) throw AppError.badRequest('Email and password are required');
 
-    const [rows]: any = await this.pool.execute(
-      `SELECT u.*, r.base_role, r.display_name AS role_display_name
-       FROM users u
-       LEFT JOIN roles r ON u.custom_role_id = r.id
-       WHERE u.email = ?`,
-      [email.trim().toLowerCase()],
-    );
-    const user = rows[0];
-    if (!user) throw AppError.unauthorized('Invalid email or password');
+    const user = await this.authRepository.findUserByEmail(email.trim().toLowerCase());
+    if (!user) { this.logger.warn(`[login] user not found email=${email}`); throw AppError.unauthorized('Invalid email or password'); }
 
     const passwordField = user.password_hash || user.password;
     const valid = await bcrypt.compare(password, passwordField);
-    if (!valid) throw AppError.unauthorized('Invalid email or password');
+    if (!valid) { this.logger.warn(`[login] wrong password userId=${user.id}`); throw AppError.unauthorized('Invalid email or password'); }
 
+    this.logger.log(`[login] success userId=${user.id} role=${user.role}`);
     const accessToken  = this.makeAccessToken(user, user.org_id, user.is_org_admin);
     const refreshToken = await this.makeRefreshToken(user.id);
 
@@ -257,18 +254,9 @@ export class AuthService {
   // ── Get current user ───────────────────────────────────────────────────
 
   async getMe(userId: string) {
+    this.logger.debug(`[getMe] userId=${userId}`);
     if (!userId) throw AppError.unauthorized();
-    const [rows]: any = await this.pool.execute(
-      `SELECT u.id, u.name, u.email, u.role, u.org_id, u.hospital_id,
-              u.first_name, u.last_name, u.phone, u.status,
-              u.is_owner, u.is_org_admin, u.custom_role_id, u.created_at,
-              r.display_name AS role_display_name, r.base_role, r.color AS role_color, r.permissions
-       FROM users u
-       LEFT JOIN roles r ON u.custom_role_id = r.id
-       WHERE u.id = ?`,
-      [userId],
-    );
-    const user = rows[0];
+    const user = await this.authRepository.findUserById(userId);
     if (!user) throw AppError.notFound('User');
     return user;
   }
@@ -276,6 +264,7 @@ export class AuthService {
   // ── Token refresh ──────────────────────────────────────────────────────
 
   async refresh(refreshToken: string) {
+    this.logger.debug(`[refresh] token rotation requested`);
     if (!refreshToken) throw AppError.unauthorized('Refresh token required');
 
     let payload: any;
@@ -317,5 +306,88 @@ export class AuthService {
     if (!refreshToken) throw AppError.badRequest('Refresh token required');
     const tokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
     await this.pool.execute('DELETE FROM refresh_tokens WHERE token_hash = ?', [tokenHash]);
+  }
+
+  // ── Forgot password ────────────────────────────────────────────────────
+
+  async forgotPassword(email: string) {
+    this.logger.log(`[forgotPassword] request for email=${email}`);
+    const normalEmail = email.trim().toLowerCase();
+
+    // Always return same message — never reveal whether the email exists
+    const [rows]: any = await this.pool.execute(
+      'SELECT id, name FROM users WHERE email = ?', [normalEmail],
+    );
+    if ((rows as any[]).length === 0) {
+      return { message: 'If that email is registered, an OTP has been sent.' };
+    }
+
+    const { id: userId, name: userName } = (rows as any[])[0];
+
+    // Invalidate any existing unused OTPs for this user
+    await this.pool.execute(
+      'DELETE FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL',
+      [userId],
+    );
+
+    // Generate a 6-digit OTP
+    const otp      = String(Math.floor(100000 + Math.random() * 900000));
+    const otpHash  = crypto.createHash('sha256').update(otp).digest('hex');
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    await this.pool.execute(
+      'INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)',
+      [uuidv4(), userId, otpHash, expiresAt],
+    );
+
+    // Send OTP via email — raw OTP is never stored, only its SHA-256 hash
+    await this.mailService.sendPasswordReset(normalEmail, userName, otp);
+
+    return { message: 'If that email is registered, an OTP has been sent.' };
+  }
+
+  // ── Reset password (OTP-based) ─────────────────────────────────────────
+
+  async resetPassword(email: string, otp: string, newPassword: string) {
+    this.logger.log(`[resetPassword] attempt email=${email}`);
+    const normalEmail = email.trim().toLowerCase();
+    const otpHash     = crypto.createHash('sha256').update(otp.trim()).digest('hex');
+
+    const [rows]: any = await this.pool.execute(
+      `SELECT prt.id, prt.user_id FROM password_reset_tokens prt
+       INNER JOIN users u ON u.id = prt.user_id
+       WHERE u.email = ? AND prt.token_hash = ? AND prt.used_at IS NULL AND prt.expires_at > NOW()`,
+      [normalEmail, otpHash],
+    );
+    const record = (rows as any[])[0];
+    if (!record) throw AppError.badRequest('OTP is invalid or has expired');
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        'UPDATE users SET password_hash = ? WHERE id = ?',
+        [hashed, record.user_id],
+      );
+      await conn.execute(
+        'UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?',
+        [record.id],
+      );
+      // Revoke all active refresh tokens — force re-login on all devices
+      await conn.execute(
+        'DELETE FROM refresh_tokens WHERE user_id = ?',
+        [record.user_id],
+      );
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    return { message: 'Password reset successfully. Please log in with your new password.' };
   }
 }

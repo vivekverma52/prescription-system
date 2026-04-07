@@ -268,6 +268,54 @@ function MedicineForm({
   )
 }
 
+// ── OCR Medicine inline edit / add form ──────────────────────────────────────
+const EMPTY_OCR = { medicine_name: '', dosage: '', instructions: '', duration: '' }
+
+function OcrMedicineForm({ initial, onSave, onCancel }: {
+  initial: typeof EMPTY_OCR
+  onSave: (data: typeof EMPTY_OCR) => void
+  onCancel: () => void
+}) {
+  const [form, setForm] = useState(initial)
+  const set = (k: keyof typeof EMPTY_OCR) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.value }))
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div>
+        <label style={lbl}>Medicine Name *</label>
+        <input style={field} autoFocus value={form.medicine_name} onChange={set('medicine_name')} placeholder="e.g. Paracetamol 500mg" />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div>
+          <label style={lbl}>Dosage</label>
+          <input style={field} value={form.dosage} onChange={set('dosage')} placeholder="e.g. 5 ml tid" />
+        </div>
+        <div>
+          <label style={lbl}>Duration</label>
+          <input style={field} value={form.duration} onChange={set('duration')} placeholder="e.g. 5 days" />
+        </div>
+      </div>
+      <div>
+        <label style={lbl}>Instructions</label>
+        <input style={field} value={form.instructions} onChange={set('instructions')} placeholder="e.g. Before meals" />
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button type="button" className="btn btn-teal" style={{ flex: 1, justifyContent: 'center' }}
+          onClick={() => {
+            if (!form.medicine_name.trim()) return toast.error('Medicine name is required')
+            onSave({ ...form, medicine_name: form.medicine_name.trim() })
+          }}>
+          Save
+        </button>
+        <button type="button" className="btn btn-ghost" onClick={onCancel} style={{ flex: 'none', padding: '0 18px' }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function PharmacistPrescriptionDetail() {
   const { id } = useParams()
@@ -279,6 +327,9 @@ export default function PharmacistPrescriptionDetail() {
   const [editId, setEditId] = useState<string | null>(null)
   const [importingIdx, setImportingIdx] = useState<number | null>(null)
   const [importedIdxs, setImportedIdxs] = useState<Set<number>>(new Set())
+  const [ocrEditIdx, setOcrEditIdx] = useState<number | null>(null)
+  const [showAddOcr, setShowAddOcr] = useState(false)
+  const [ocrSaving, setOcrSaving] = useState(false)
 
   const publicUrl = `${window.location.origin}/public/${prescription?.access_token}`
 
@@ -326,6 +377,50 @@ export default function PharmacistPrescriptionDetail() {
     }
   }
 
+  // ── OCR medicine CRUD ─────────────────────────────────────────────────
+  const saveOcrMedicines = async (updatedMeds: typeof EMPTY_OCR[]) => {
+    setOcrSaving(true)
+    try {
+      const current = prescription!.interpreted_data as any
+      await api.put(`/prescriptions/${id}/interpreted-data`, {
+        ...current,
+        interpreted_data: {
+          ...(current?.interpreted_data ?? {}),
+          medicines: updatedMeds,
+        },
+      })
+      await fetchPrescription()
+    } catch {
+      toast.error('Failed to save')
+    } finally {
+      setOcrSaving(false)
+    }
+  }
+
+  const handleOcrEdit = async (idx: number, updated: typeof EMPTY_OCR) => {
+    const meds = [...((prescription!.interpreted_data as any)?.interpreted_data?.medicines ?? [])]
+    meds[idx] = updated
+    await saveOcrMedicines(meds)
+    setOcrEditIdx(null)
+    toast.success('Medicine updated')
+  }
+
+  const handleOcrDelete = async (idx: number, name: string) => {
+    if (!confirm(`Remove "${name}"?`)) return
+    const meds = [...((prescription!.interpreted_data as any)?.interpreted_data?.medicines ?? [])]
+    meds.splice(idx, 1)
+    await saveOcrMedicines(meds)
+    toast.success('Medicine removed')
+  }
+
+  const handleOcrAdd = async (newMed: typeof EMPTY_OCR) => {
+    const meds = [...((prescription!.interpreted_data as any)?.interpreted_data?.medicines ?? [])]
+    meds.push(newMed)
+    await saveOcrMedicines(meds)
+    setShowAddOcr(false)
+    toast.success(`${newMed.medicine_name} added`)
+  }
+
   const handleDelete = async (medicineId: string, name: string) => {
     if (!confirm(`Remove "${name}"?`)) return
     try {
@@ -339,7 +434,9 @@ export default function PharmacistPrescriptionDetail() {
   }
 
   const handleRender = async () => {
-    if (!prescription?.interpreted_data?.medicines?.length) return toast.error('Add at least one medicine before rendering')
+    const pharmacistMeds = prescription?.interpreted_data?.medicines?.length ?? 0
+    const ocrMeds = (prescription?.interpreted_data as any)?.interpreted_data?.medicines?.length ?? 0
+    if (pharmacistMeds === 0 && ocrMeds === 0) return toast.error('Add at least one medicine before rendering')
     setRendering(true)
     try {
       await api.put(`/prescriptions/${prescription.id}/render`, { video_url: null })
@@ -549,18 +646,42 @@ export default function PharmacistPrescriptionDetail() {
             const extractedMeds = extracted?.medicines ?? []
             const hospital = extracted?.hospital_details
             const doctor = extracted?.doctor_details
+            const isOcr = (ai as any).ocr_source === true
             return (
-              <div className="card" style={{ padding: '16px 18px', border: '1.5px solid rgba(0,184,148,.3)', background: 'linear-gradient(135deg, rgba(0,184,148,.04) 0%, var(--surface) 100%)' }}>
+              <div className="card" style={{ padding: '16px 18px', border: `1.5px solid ${isOcr ? 'rgba(99,102,241,.35)' : 'rgba(0,184,148,.3)'}`, background: isOcr ? 'linear-gradient(135deg, rgba(99,102,241,.04) 0%, var(--surface) 100%)' : 'linear-gradient(135deg, rgba(0,184,148,.04) 0%, var(--surface) 100%)' }}>
                 {/* Header */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--teal-light)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" strokeWidth="2">
-                        <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-                      </svg>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: isOcr ? 'rgba(99,102,241,.12)' : 'var(--teal-light)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {isOcr ? (
+                        /* Scan / OCR icon */
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgb(99,102,241)" strokeWidth="2">
+                          <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/>
+                          <line x1="3" y1="12" x2="21" y2="12"/>
+                        </svg>
+                      ) : (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" strokeWidth="2">
+                          <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                        </svg>
+                      )}
                     </div>
                     <div>
-                      <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink)', margin: 0 }}>AI Extracted Data</p>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink)', margin: 0 }}>
+                          {isOcr ? 'OCR Extracted Data' : 'AI Extracted Data'}
+                        </p>
+                        {isOcr && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 800, letterSpacing: '.6px',
+                            padding: '2px 7px', borderRadius: 20,
+                            background: 'rgba(99,102,241,.12)', color: 'rgb(79,70,229)',
+                            border: '1px solid rgba(99,102,241,.25)',
+                            textTransform: 'uppercase',
+                          }}>
+                            OCR
+                          </span>
+                        )}
+                      </div>
                       {ai.metadata?.processed_at && (
                         <p style={{ fontSize: 10, color: 'var(--ink-light)', margin: 0 }}>
                           Processed {new Date(ai.metadata.processed_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
@@ -568,7 +689,7 @@ export default function PharmacistPrescriptionDetail() {
                       )}
                     </div>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 20, background: 'var(--teal-light)', color: 'var(--teal-dark)' }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 20, background: isOcr ? 'rgba(99,102,241,.1)' : 'var(--teal-light)', color: isOcr ? 'rgb(79,70,229)' : 'var(--teal-dark)' }}>
                     {ai.status === 'success' ? 'Success' : ai.status}
                   </span>
                 </div>
@@ -593,63 +714,70 @@ export default function PharmacistPrescriptionDetail() {
                   </div>
                 )}
 
-                {/* Extracted medicines */}
-                {extractedMeds.length > 0 && (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                      <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink)' }}>
-                        Extracted Medicines ({extractedMeds.length})
-                      </p>
-                      {extractedMeds.some((_, i) => !importedIdxs.has(i)) && (
-                        <button
-                          onClick={() => handleImportAll(extractedMeds)}
-                          className="btn btn-teal btn-sm"
-                          disabled={importingIdx !== null}
-                          style={{ fontSize: 11, opacity: importingIdx !== null ? .6 : 1 }}>
-                          Import All
-                        </button>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {extractedMeds.map((m, i) => {
-                        const imported = importedIdxs.has(i)
-                        return (
-                          <div key={i} style={{
-                            display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 12px',
-                            borderRadius: 9, background: imported ? 'rgba(16,185,129,.06)' : 'var(--cell)',
-                            border: `1px solid ${imported ? 'rgba(16,185,129,.25)' : 'var(--border)'}`,
-                          }}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>{m.medicine_name}</p>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1px 12px' }}>
-                                {m.dosage && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Dosage: <span style={{ color: 'var(--ink)' }}>{m.dosage}</span></span>}
-                                {m.duration && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Duration: <span style={{ color: 'var(--ink)' }}>{m.duration}</span></span>}
-                                {m.instructions && <span style={{ fontSize: 11, color: 'var(--ink-light)', width: '100%' }}>Instructions: <span style={{ color: 'var(--ink)' }}>{m.instructions}</span></span>}
-                              </div>
-                            </div>
-                            {imported ? (
-                              <span style={{ fontSize: 11, fontWeight: 600, color: '#10B981', flexShrink: 0, marginTop: 1 }}>
-                                ✓ Added
-                              </span>
-                            ) : (
-                              <button
-                                onClick={() => handleImportMedicine(m, i)}
-                                disabled={importingIdx !== null}
-                                className="btn btn-ghost btn-sm"
-                                style={{ flexShrink: 0, fontSize: 11, opacity: importingIdx === i ? .6 : 1 }}>
-                                {importingIdx === i ? '…' : 'Import'}
-                              </button>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </>
-                )}
+                {/* Extracted medicines — editable */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink)' }}>
+                    Medicines ({extractedMeds.length})
+                  </p>
+                  <button
+                    onClick={() => { setShowAddOcr(true); setOcrEditIdx(null) }}
+                    className="btn btn-teal btn-sm"
+                    disabled={ocrSaving || showAddOcr}
+                    style={{ fontSize: 11 }}>
+                    + Add Medicine
+                  </button>
+                </div>
 
-                {extractedMeds.length === 0 && (
-                  <p style={{ fontSize: 12, color: 'var(--ink-light)', fontStyle: 'italic' }}>No medicines extracted from this prescription.</p>
-                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {extractedMeds.map((m, i) =>
+                    ocrEditIdx === i ? (
+                      /* ── Inline edit row ── */
+                      <div key={i} style={{ padding: 14, borderRadius: 10, background: 'rgba(99,102,241,.06)', border: '1.5px solid rgba(99,102,241,.25)' }}>
+                        <p style={{ fontSize: 11, fontWeight: 600, color: 'rgb(79,70,229)', marginBottom: 10 }}>Edit medicine #{i + 1}</p>
+                        <OcrMedicineForm
+                          initial={{ medicine_name: m.medicine_name, dosage: m.dosage ?? '', instructions: m.instructions ?? '', duration: m.duration ?? '' }}
+                          onSave={updated => handleOcrEdit(i, updated)}
+                          onCancel={() => setOcrEditIdx(null)}
+                        />
+                      </div>
+                    ) : (
+                      /* ── Display row ── */
+                      <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'var(--cell)', border: '1px solid var(--border)' }}>
+                        <div style={{ width: 22, height: 22, borderRadius: 6, background: 'rgba(99,102,241,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: 'rgb(79,70,229)' }}>{i + 1}</span>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>{m.medicine_name}</p>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1px 12px' }}>
+                            {m.dosage      && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Dosage: <span style={{ color: 'var(--ink)' }}>{m.dosage}</span></span>}
+                            {m.duration    && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Duration: <span style={{ color: 'var(--ink)' }}>{m.duration}</span></span>}
+                            {m.instructions && <span style={{ fontSize: 11, color: 'var(--ink-light)', width: '100%' }}>Instructions: <span style={{ color: 'var(--ink)' }}>{m.instructions}</span></span>}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                          <button onClick={() => { setOcrEditIdx(i); setShowAddOcr(false) }} className="btn btn-ghost btn-sm" disabled={ocrSaving} style={{ fontSize: 11 }}>Edit</button>
+                          <button onClick={() => handleOcrDelete(i, m.medicine_name)} className="btn btn-ghost btn-sm" disabled={ocrSaving} style={{ fontSize: 11, color: '#ef4444' }}>✕</button>
+                        </div>
+                      </div>
+                    )
+                  )}
+
+                  {extractedMeds.length === 0 && !showAddOcr && (
+                    <p style={{ fontSize: 12, color: 'var(--ink-light)', fontStyle: 'italic' }}>No medicines yet. Click "+ Add Medicine" to add one.</p>
+                  )}
+
+                  {/* ── Add new OCR medicine form ── */}
+                  {showAddOcr && (
+                    <div style={{ padding: 14, borderRadius: 10, background: 'rgba(99,102,241,.06)', border: '1.5px solid rgba(99,102,241,.25)' }}>
+                      <p style={{ fontSize: 11, fontWeight: 600, color: 'rgb(79,70,229)', marginBottom: 10 }}>Add Medicine</p>
+                      <OcrMedicineForm
+                        initial={EMPTY_OCR}
+                        onSave={handleOcrAdd}
+                        onCancel={() => setShowAddOcr(false)}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             )
           })()}

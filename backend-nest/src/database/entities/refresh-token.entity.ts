@@ -1,4 +1,5 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { User } from './user.entity';
 
 @Entity('refresh_tokens')
 export class RefreshToken {
@@ -25,4 +26,9 @@ export class RefreshToken {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @ManyToOne(() => User, (user) => user.refreshTokens)
+  @JoinColumn({ name: 'user_id' })
+  user: User;
 }

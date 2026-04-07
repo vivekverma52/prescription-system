@@ -1,16 +1,20 @@
 /**
  * PrescriptionService — Level 3 (Medical)
- * Covers: Prescriptions · Medicines · Medicine Library (MongoDB)
+ * Prescriptions stored in MongoDB · Medicine Library in MongoDB · Org limits in MySQL
  */
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import * as crypto from 'crypto';
 import * as mongoose from 'mongoose';
+import * as crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { Pool } from 'mysql2/promise';
+import { ConfigService } from '@nestjs/config';
 import { MYSQL_POOL } from '../../database/database.module';
 import { AppError } from '../../common/errors/app.error';
+import { S3Service } from '../../common/s3/s3.service';
+import { SqsService } from '../../common/sqs/sqs.service';
+import { Prescription, PrescriptionDocument } from './schemas/prescription.schema';
 import {
   MedicinePrescription,
   MedicinePrescriptionDocument,
@@ -40,28 +44,148 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function generatePatientUid(orgId: string | null, hospitalId: string | null, doctorId: string, rxId: string): string {
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const seg  = (val: string | null, fallback: string) =>
+    (val ?? fallback).replace(/-/g, '').slice(0, 8).toUpperCase();
+  return `${seg(orgId, 'NORG')}-${seg(hospitalId, 'NOHOSP')}-${seg(doctorId, 'NODOC')}-${seg(rxId, rxId)}-${date}`;
+}
+
 @Injectable()
-export class PrescriptionService {
+export class PrescriptionService implements OnModuleInit {
+  private readonly logger = new Logger(PrescriptionService.name);
+
   constructor(
+    // MySQL pool — used only for org/plan limit checks (orgs live in MySQL)
     @Inject(MYSQL_POOL) private readonly pool: Pool,
+    // MongoDB — prescriptions
+    @InjectModel(Prescription.name)
+    private readonly prescriptionModel: Model<PrescriptionDocument>,
+    // MongoDB — medicine library
     @InjectModel(MedicinePrescription.name)
     private readonly medicineLibraryModel: Model<MedicinePrescriptionDocument>,
+    private readonly s3Service: S3Service,
+    private readonly sqsService: SqsService,
+    private readonly configService: ConfigService,
   ) {}
 
+  onModuleInit() {
+    const resultQueueUrl = this.configService.get<string>('SQS_RESULT_QUEUE_URL');
+    this.sqsService.startPolling(resultQueueUrl, (body) => this.handleResultMessage(body));
+  }
+
+  /**
+   * SQS consumer — OCR result queue handler.
+   *
+   * Incoming shape:
+   * {
+   *   imageUrl: string,          // full S3 URL
+   *   patientId: string,         // patient_uid (fallback lookup)
+   *   status: "success" | ...,
+   *   processedAt: string,
+   *   extractedData: {
+   *     medicines: [{ medicine_name, dosage, instructions, duration }],
+   *     doctor_details: { name, qualifications, contact },
+   *     hospital_details: { name, address },
+   *     patient_details: { name, phone, date },
+   *     raw_text_preview: string,
+   *   },
+   *   processingSummary: { medicinesFound, ... },
+   *   errorMessage: string | null,
+   * }
+   */
+  private async handleResultMessage(body: Record<string, unknown>): Promise<void> {
+    this.logger.log(`[SQS Consumer] Received: ${JSON.stringify(body)}`);
+
+    const { imageUrl, patientId, status, processedAt, extractedData, processingSummary, errorMessage } = body as {
+      imageUrl: string;
+      patientId: string;
+      status: string;
+      processedAt: string;
+      extractedData: Record<string, any>;
+      processingSummary: Record<string, any>;
+      errorMessage: string | null;
+    };
+
+    if (!imageUrl) {
+      this.logger.warn('[SQS Consumer] Skipping — missing imageUrl');
+      return;
+    }
+
+    if (status !== 'success') {
+      this.logger.warn(`[SQS Consumer] OCR status=${status} error=${errorMessage} — skipping save`);
+      return;
+    }
+
+    // Extract short S3 key from full URL for DB lookup
+    const urlMatch = imageUrl.match(/\.amazonaws\.com\/(.+)$/);
+    const dbImageKey = urlMatch ? urlMatch[1] : null;
+    this.logger.log(`[SQS Consumer] imageUrl=${imageUrl}`);
+    this.logger.log(`[SQS Consumer] Extracted DB key=${dbImageKey}, patientId=${patientId}`);
+
+    // Find prescription by image_key, fall back to patient_uid
+    let prescription: any = null;
+    if (dbImageKey) {
+      prescription = await this.prescriptionModel.findOne({ image_key: dbImageKey }).lean();
+    }
+    if (!prescription && patientId) {
+      prescription = await this.prescriptionModel.findOne({ patient_uid: patientId }).lean();
+      if (prescription) this.logger.log(`[SQS Consumer] Matched via patient_uid fallback`);
+    }
+    if (!prescription) {
+      this.logger.warn(`[SQS Consumer] No prescription found for image_key=${dbImageKey} or patientId=${patientId}`);
+      return;
+    }
+    this.logger.log(`[SQS Consumer] Matched prescription id=${prescription.id}`);
+
+    // Preserve pharmacist-added medicines, merge OCR data into interpreted_data
+    const existingMedicines = prescription.interpreted_data?.medicines ?? [];
+
+    const newInterpretedData = {
+      medicines: existingMedicines,          // pharmacist-added medicines (preserved)
+      ocr_source: true,                      // flag: data came from OCR
+      interpreted_data: {                    // OCR extracted fields
+        medicines:        extractedData?.medicines        ?? [],
+        doctor_details:   extractedData?.doctor_details   ?? {},
+        hospital_details: extractedData?.hospital_details ?? {},
+        patient_details:  extractedData?.patient_details  ?? {},
+        raw_text_preview: extractedData?.raw_text_preview ?? '',
+      },
+      metadata: {
+        processed_at:       processedAt,
+        processing_summary: processingSummary,
+      },
+      status,
+    };
+
+    await this.prescriptionModel.updateOne(
+      { id: prescription.id },
+      { $set: { interpreted_data: newInterpretedData } },
+    );
+    this.logger.log(`[SQS Consumer] OCR data saved — ${processingSummary?.medicinesFound ?? 0} medicines found`);
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
-  // PRESCRIPTIONS
+  // SUBSCRIPTION LIMIT (org data lives in MySQL)
   // ═══════════════════════════════════════════════════════════════════════
 
   async assertSubscriptionLimit(orgId: string | null) {
     if (!orgId) return;
-    const [orgRows]: any = await this.pool.execute('SELECT * FROM organizations WHERE id = ?', [orgId]);
+    const [orgRows]: any = await this.pool.execute(
+      'SELECT * FROM organizations WHERE id = ?', [orgId],
+    );
     const org = orgRows[0];
     if (!org || org.plan === 'ENTERPRISE' || org.plan === 'ENT') return;
-    const [[{ count }]]: any = await this.pool.execute(
-      `SELECT COUNT(*) AS count FROM prescriptions
-       WHERE org_id = ? AND MONTH(created_at) = MONTH(NOW()) AND YEAR(created_at) = YEAR(NOW())`,
-      [orgId],
-    );
+
+    const now   = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end   = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    const count = await this.prescriptionModel.countDocuments({
+      org_id:     orgId,
+      created_at: { $gte: start, $lt: end },
+    });
+
     if (count >= org.prescription_limit) {
       const err = new AppError(
         `Monthly limit of ${org.prescription_limit} prescriptions reached on your ${org.plan} plan. Please upgrade.`,
@@ -74,125 +198,298 @@ export class PrescriptionService {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // HELPERS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private withUrls(doc: any): any {
+    if (!doc) return doc;
+    return {
+      ...doc,
+      image_url: doc.image_key ? this.s3Service.getObjectUrl(doc.image_key) : null,
+      video_url: doc.video_key ? this.s3Service.getObjectUrl(doc.video_key) : null,
+    };
+  }
+
+  private toPlain(doc: any): any {
+    if (!doc) return doc;
+    const obj = doc.toObject ? doc.toObject({ versionKey: false }) : { ...doc };
+    // Expose string id, remove mongo _id
+    if (obj._id) {
+      delete obj._id;
+    }
+    return obj;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PRESCRIPTIONS — MongoDB
+  // ═══════════════════════════════════════════════════════════════════════
+
   async createPrescription(params: {
-    userId: string; userName: string; orgId: string | null;
+    userId: string; userName: string; orgId: string | null; hospitalId: string | null;
     patient_name: string; patient_phone: string;
-    language?: string; notes?: string; imageFile?: any;
+    language?: string; notes?: string; imageKey?: string | null;
   }) {
-    const { userId, userName, orgId, patient_name, patient_phone, language, notes, imageFile } = params;
+    const { userId, userName, orgId, hospitalId, patient_name, patient_phone, language, notes, imageKey } = params;
     if (!patient_name || !patient_phone) throw AppError.badRequest('patient_name and patient_phone are required');
 
     const id           = uuidv4();
     const access_token = crypto.randomBytes(8).toString('hex');
-    const image_url    = imageFile?.location ?? null;
+    const patient_uid  = generatePatientUid(orgId, hospitalId, userId, id);
 
-    await this.pool.execute(
-      `INSERT INTO prescriptions (id, doctor_id, doctor_name, patient_name, patient_phone, language, image_url, access_token, notes, org_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, userId, userName, patient_name.trim(), patient_phone.trim(), language || 'English', image_url, access_token, notes?.trim() || null, orgId || null],
-    );
+    const created = await this.prescriptionModel.create({
+      id,
+      doctor_id:    userId,
+      doctor_name:  userName,
+      org_id:       orgId   ?? null,
+      hospital_id:  hospitalId ?? null,
+      patient_name: patient_name.trim(),
+      patient_phone: patient_phone.trim(),
+      language:     language || 'English',
+      image_key:    imageKey ?? null,
+      access_token,
+      notes:        notes?.trim() || null,
+      patient_uid,
+    });
 
-    const [rows]: any = await this.pool.execute('SELECT * FROM prescriptions WHERE id = ?', [id]);
-    return rows[0];
+    return this.withUrls(this.toPlain(created));
   }
 
   async listPrescriptions(params: { role: string; userId: string; orgId: string | null }) {
     const { role, userId, orgId } = params;
-    if (role === 'DOCTOR') {
-      const [rows]: any = await this.pool.execute(
-        `SELECT * FROM prescriptions WHERE doctor_id = ? ORDER BY created_at DESC`, [userId],
-      );
-      return rows;
-    }
-    if (orgId) {
-      const [rows]: any = await this.pool.execute(
-        `SELECT * FROM prescriptions WHERE org_id = ? ORDER BY created_at DESC`, [orgId],
-      );
-      return rows;
-    }
-    const [rows]: any = await this.pool.execute(
-      `SELECT * FROM prescriptions ORDER BY created_at DESC`,
-    );
-    return rows;
+    let filter: any = {};
+    if (role === 'DOCTOR')       filter = { doctor_id: userId };
+    else if (orgId)              filter = { org_id: orgId };
+
+    const docs = await this.prescriptionModel
+      .find(filter)
+      .sort({ created_at: -1 })
+      .lean();
+
+    return docs.map((d) => this.withUrls(d));
   }
 
   async getPrescriptionById(id: string, params: { role: string; userId: string; orgId: string | null }) {
     if (!id) throw AppError.badRequest('Prescription ID is required');
     const { role, userId, orgId } = params;
-    const [rows]: any = await this.pool.execute(
-      'SELECT * FROM prescriptions WHERE id = ? OR access_token = ?', [id, id],
-    );
-    const prescription = rows[0];
+
+    const prescription = await this.prescriptionModel
+      .findOne({ $or: [{ id }, { access_token: id }] })
+      .lean();
+
     if (!prescription) throw AppError.notFound('Prescription');
-    if (role === 'DOCTOR'     && prescription.doctor_id !== userId)         throw AppError.forbidden();
-    if (role === 'PHARMACIST' && orgId && prescription.org_id !== orgId)   throw AppError.forbidden();
-    // Parse interpreted_data JSON string back to object
-    if (prescription.interpreted_data && typeof prescription.interpreted_data === 'string') {
-      try { prescription.interpreted_data = JSON.parse(prescription.interpreted_data); } catch { prescription.interpreted_data = null; }
-    }
-    return prescription;
+    if (role === 'DOCTOR'     && prescription.doctor_id !== userId)       throw AppError.forbidden();
+    if (role === 'PHARMACIST' && orgId && prescription.org_id !== orgId)  throw AppError.forbidden();
+
+    return this.withUrls(prescription);
   }
 
   async saveInterpretedData(id: string, data: any) {
-    const [rows]: any = await this.pool.execute('SELECT id FROM prescriptions WHERE id = ?', [id]);
-    if (rows.length === 0) throw AppError.notFound('Prescription');
-    await this.pool.execute(
-      'UPDATE prescriptions SET interpreted_data = ? WHERE id = ?',
-      [JSON.stringify(data), id],
-    );
+    const prescription = await this.prescriptionModel.findOne({ id }).lean();
+    if (!prescription) throw AppError.notFound('Prescription');
+
+    await this.prescriptionModel.updateOne({ id }, { $set: { interpreted_data: data } });
     return { message: 'Interpreted data saved' };
   }
 
   async updateRender(id: string, _actorId: string, video_url?: string) {
-    const [rows]: any = await this.pool.execute('SELECT * FROM prescriptions WHERE id = ? OR access_token = ?', [id, id]);
-    const row = rows[0];
-    if (!row) throw AppError.notFound('Prescription');
-    await this.pool.execute(
-      'UPDATE prescriptions SET video_url = ?, status = "RENDERED" WHERE id = ?',
-      [video_url?.trim() || null, row.id],
+    const prescription = await this.prescriptionModel
+      .findOne({ $or: [{ id }, { access_token: id }] })
+      .lean();
+    if (!prescription) throw AppError.notFound('Prescription');
+
+    let videoKey: string | null = null;
+    if (video_url?.trim()) {
+      const trimmed = video_url.trim();
+      const match   = trimmed.match(/\.amazonaws\.com\/(.+)$/);
+      videoKey      = match ? match[1] : trimmed;
+    }
+
+    await this.prescriptionModel.updateOne(
+      { id: prescription.id },
+      { $set: { video_key: videoKey, status: 'RENDERED' } },
     );
-    const [updated]: any = await this.pool.execute('SELECT * FROM prescriptions WHERE id = ?', [row.id]);
-    return updated[0];
+
+    // ── Send render payload to my-standard-queue ─────────────────────────
+    const renderQueueUrl = this.configService.get<string>('SQS_RENDER_QUEUE_URL');
+    if (renderQueueUrl) {
+      const ocr       = (prescription.interpreted_data as any)?.interpreted_data ?? {};
+      const medicines = ocr.medicines ?? [];
+
+      const payload = {
+        status:     'success',
+        request_id: prescription.id,
+        language:   prescription.language ?? 'en',
+        interpreted_data: {
+          patient_details: {
+            name:    prescription.patient_name,
+            contact: prescription.patient_phone,
+            date:    new Date(prescription.created_at).toISOString().slice(0, 10),
+            age:     ocr.patient_details?.age    ?? null,
+            gender:  ocr.patient_details?.gender ?? null,
+          },
+          doctor_details: {
+            name:           prescription.doctor_name,
+            specialization: ocr.doctor_details?.qualifications ?? null,
+            clinic:         ocr.hospital_details?.name          ?? null,
+            registration:   ocr.doctor_details?.contact         ?? null,
+          },
+          medicines: medicines.map((m: any) => ({
+            medicine_name: m.medicine_name,
+            dosage:        m.dosage        ?? null,
+            instructions:  m.instructions  ?? null,
+            duration:      m.duration      ?? null,
+            time_of_day:   m.time_of_day   ?? null,
+            with_food:     m.with_food     ?? null,
+            text:          m.text          ?? { en: m.medicine_name },
+          })),
+          summary:           ocr.summary           ?? null,
+          follow_up:         ocr.follow_up         ?? null,
+          emergency_contact: ocr.emergency_contact ?? null,
+        },
+      };
+
+      this.logger.log(`[Render Queue] Sending payload for prescription=${prescription.id} medicines=${medicines.length}`);
+      await this.sqsService.sendMessage(renderQueueUrl, payload);
+      this.logger.log(`[Render Queue] Payload sent to ${renderQueueUrl}`);
+    } else {
+      this.logger.warn('[Render Queue] SQS_RENDER_QUEUE_URL not set — skipping render queue send');
+    }
+
+    const updated = await this.prescriptionModel.findOne({ id: prescription.id }).lean();
+    return this.withUrls(updated);
   }
 
   async updateStatus(id: string, params: { userId: string; role: string; orgId: string | null; status: string }) {
     const { userId, role, orgId, status } = params;
     if (!status) throw AppError.validation('Status is required');
+
     const upperStatus = status.toUpperCase();
-    if (!VALID_STATUSES.includes(upperStatus)) throw AppError.validation(`Status must be one of: ${VALID_STATUSES.join(', ')}`);
-    const [rows]: any = await this.pool.execute('SELECT * FROM prescriptions WHERE id = ? OR access_token = ?', [id, id]);
-    const row = rows[0];
-    if (!row) throw AppError.notFound('Prescription');
+    if (!VALID_STATUSES.includes(upperStatus))
+      throw AppError.validation(`Status must be one of: ${VALID_STATUSES.join(', ')}`);
+
+    const prescription = await this.prescriptionModel
+      .findOne({ $or: [{ id }, { access_token: id }] })
+      .lean();
+    if (!prescription) throw AppError.notFound('Prescription');
+
     if (role === 'PHARMACIST') {
       if (upperStatus !== 'SENT') throw AppError.forbidden('Pharmacist can only mark a prescription as SENT');
-      if (orgId && row.org_id !== orgId) throw AppError.forbidden();
+      if (orgId && prescription.org_id !== orgId) throw AppError.forbidden();
     } else {
-      if (row.doctor_id !== userId) throw AppError.forbidden();
+      if (prescription.doctor_id !== userId) throw AppError.forbidden();
     }
-    await this.pool.execute('UPDATE prescriptions SET status = ? WHERE id = ?', [upperStatus, row.id]);
+
+    await this.prescriptionModel.updateOne({ id: prescription.id }, { $set: { status: upperStatus } });
     return { message: 'Status updated' };
   }
 
   async removePrescription(id: string, doctorId: string) {
-    const [rows]: any = await this.pool.execute('SELECT * FROM prescriptions WHERE id = ? OR access_token = ?', [id, id]);
-    const row = rows[0];
-    if (!row) throw AppError.notFound('Prescription');
-    if (row.doctor_id !== doctorId) throw AppError.forbidden();
-    await this.pool.execute('DELETE FROM prescriptions WHERE id = ?', [row.id]);
+    const prescription = await this.prescriptionModel
+      .findOne({ $or: [{ id }, { access_token: id }] })
+      .lean();
+    if (!prescription) throw AppError.notFound('Prescription');
+    if (prescription.doctor_id !== doctorId) throw AppError.forbidden();
+
+    await this.prescriptionModel.deleteOne({ id: prescription.id });
     return { message: 'Prescription deleted' };
   }
 
   async getPublicPrescription(token: string) {
     if (!token) throw AppError.badRequest('Access token is required');
-    const [rows]: any = await this.pool.execute('SELECT * FROM prescriptions WHERE access_token = ?', [token]);
-    const p = rows[0];
+
+    const p = await this.prescriptionModel.findOne({ access_token: token }).lean();
     if (!p) throw AppError.notFound('Prescription');
-    let interpreted_data: any = null;
-    if (p.interpreted_data) {
-      try { interpreted_data = typeof p.interpreted_data === 'string' ? JSON.parse(p.interpreted_data) : p.interpreted_data; } catch { interpreted_data = null; }
-    }
-    return { doctor_name: p.doctor_name, patient_name: p.patient_name, language: p.language,
-             image_url: p.image_url, video_url: p.video_url, created_at: p.created_at, interpreted_data };
+
+    const withUrls = this.withUrls(p);
+    return {
+      doctor_name:      p.doctor_name,
+      patient_name:     p.patient_name,
+      language:         p.language,
+      patient_uid:      p.patient_uid,
+      image_url:        withUrls.image_url,
+      video_url:        withUrls.video_url,
+      created_at:       p.created_at,
+      interpreted_data: p.interpreted_data ?? null,
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PER-PRESCRIPTION MEDICINES (stored inside interpreted_data.medicines)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private async getPrescriptionRaw(id: string) {
+    const doc = await this.prescriptionModel.findOne({ id }).lean();
+    if (!doc) throw AppError.notFound('Prescription');
+    return doc;
+  }
+
+  async addMedicineToRx(prescriptionId: string, _actorId: string, body: { name: string; quantity?: string; frequency: string; course: string; description?: string }) {
+    if (!body.name?.trim() || !body.frequency?.trim() || !body.course?.trim())
+      throw AppError.badRequest('name, frequency and course are required');
+
+    const doc      = await this.getPrescriptionRaw(prescriptionId);
+    const medicines: any[] = Array.isArray(doc.interpreted_data?.medicines)
+      ? doc.interpreted_data.medicines : [];
+
+    const med = {
+      id:          uuidv4(),
+      name:        body.name.trim(),
+      quantity:    body.quantity || '1',
+      frequency:   body.frequency.trim(),
+      course:      body.course.trim(),
+      description: body.description?.trim() || null,
+    };
+    medicines.push(med);
+
+    await this.prescriptionModel.updateOne(
+      { id: prescriptionId },
+      { $set: { 'interpreted_data.medicines': medicines } },
+    );
+    return med;
+  }
+
+  async updateMedicineInRx(prescriptionId: string, medicineId: string, body: { name: string; quantity?: string; frequency: string; course: string; description?: string }) {
+    if (!body.name?.trim() || !body.frequency?.trim() || !body.course?.trim())
+      throw AppError.badRequest('name, frequency and course are required');
+
+    const doc      = await this.getPrescriptionRaw(prescriptionId);
+    const medicines: any[] = Array.isArray(doc.interpreted_data?.medicines)
+      ? doc.interpreted_data.medicines : [];
+
+    const idx = medicines.findIndex((m: any) => m.id === medicineId);
+    if (idx === -1) throw AppError.notFound('Medicine');
+
+    medicines[idx] = {
+      ...medicines[idx],
+      name:        body.name.trim(),
+      quantity:    body.quantity || medicines[idx].quantity,
+      frequency:   body.frequency.trim(),
+      course:      body.course.trim(),
+      description: body.description?.trim() ?? medicines[idx].description,
+    };
+
+    await this.prescriptionModel.updateOne(
+      { id: prescriptionId },
+      { $set: { 'interpreted_data.medicines': medicines } },
+    );
+    return medicines[idx];
+  }
+
+  async deleteMedicineFromRx(prescriptionId: string, medicineId: string) {
+    const doc      = await this.getPrescriptionRaw(prescriptionId);
+    const medicines: any[] = Array.isArray(doc.interpreted_data?.medicines)
+      ? doc.interpreted_data.medicines : [];
+
+    const idx = medicines.findIndex((m: any) => m.id === medicineId);
+    if (idx === -1) throw AppError.notFound('Medicine');
+    medicines.splice(idx, 1);
+
+    await this.prescriptionModel.updateOne(
+      { id: prescriptionId },
+      { $set: { 'interpreted_data.medicines': medicines } },
+    );
+    return { message: 'Medicine removed' };
   }
 
   searchMedicines(query: string): string[] {
@@ -201,78 +498,15 @@ export class PrescriptionService {
     return COMMON_MEDICINES.filter((m) => m.toLowerCase().includes(q)).slice(0, 15);
   }
 
-  // ── Per-prescription medicines (stored in interpreted_data.medicines) ──
-
-  private async getPrescriptionRaw(id: string) {
-    const [rows]: any = await this.pool.execute(
-      'SELECT * FROM prescriptions WHERE id = ?', [id],
-    );
-    const row = rows[0];
-    if (!row) throw AppError.notFound('Prescription');
-    let data: any = {};
-    if (row.interpreted_data) {
-      try { data = typeof row.interpreted_data === 'string' ? JSON.parse(row.interpreted_data) : row.interpreted_data; } catch { data = {}; }
-    }
-    return { row, data };
-  }
-
-  async addMedicineToRx(prescriptionId: string, actorId: string, body: { name: string; quantity?: string; frequency: string; course: string; description?: string }) {
-    const { row, data } = await this.getPrescriptionRaw(prescriptionId);
-    if (row.doctor_id !== actorId && row.org_id !== actorId) {
-      // Allow pharmacists: just check prescription exists — no strict ownership
-    }
-    if (!body.name?.trim() || !body.frequency?.trim() || !body.course?.trim()) {
-      throw AppError.badRequest('name, frequency and course are required');
-    }
-    const medicines: any[] = Array.isArray(data.medicines) ? data.medicines : [];
-    const med = {
-      id: uuidv4(),
-      name: body.name.trim(),
-      quantity: body.quantity || '1',
-      frequency: body.frequency.trim(),
-      course: body.course.trim(),
-      description: body.description?.trim() || null,
-    };
-    medicines.push(med);
-    data.medicines = medicines;
-    await this.pool.execute('UPDATE prescriptions SET interpreted_data = ? WHERE id = ?', [JSON.stringify(data), prescriptionId]);
-    return med;
-  }
-
-  async updateMedicineInRx(prescriptionId: string, medicineId: string, body: { name: string; quantity?: string; frequency: string; course: string; description?: string }) {
-    const { data } = await this.getPrescriptionRaw(prescriptionId);
-    const medicines: any[] = Array.isArray(data.medicines) ? data.medicines : [];
-    const idx = medicines.findIndex((m: any) => m.id === medicineId);
-    if (idx === -1) throw AppError.notFound('Medicine');
-    if (!body.name?.trim() || !body.frequency?.trim() || !body.course?.trim()) {
-      throw AppError.badRequest('name, frequency and course are required');
-    }
-    medicines[idx] = { ...medicines[idx], name: body.name.trim(), quantity: body.quantity || medicines[idx].quantity, frequency: body.frequency.trim(), course: body.course.trim(), description: body.description?.trim() ?? medicines[idx].description };
-    data.medicines = medicines;
-    await this.pool.execute('UPDATE prescriptions SET interpreted_data = ? WHERE id = ?', [JSON.stringify(data), prescriptionId]);
-    return medicines[idx];
-  }
-
-  async deleteMedicineFromRx(prescriptionId: string, medicineId: string) {
-    const { data } = await this.getPrescriptionRaw(prescriptionId);
-    const medicines: any[] = Array.isArray(data.medicines) ? data.medicines : [];
-    const idx = medicines.findIndex((m: any) => m.id === medicineId);
-    if (idx === -1) throw AppError.notFound('Medicine');
-    medicines.splice(idx, 1);
-    data.medicines = medicines;
-    await this.pool.execute('UPDATE prescriptions SET interpreted_data = ? WHERE id = ?', [JSON.stringify(data), prescriptionId]);
-    return { message: 'Medicine removed' };
-  }
-
   // ═══════════════════════════════════════════════════════════════════════
   // MEDICINE LIBRARY (MongoDB)
   // ═══════════════════════════════════════════════════════════════════════
 
   async createMedicineLibraryEntry(data: any) {
     const { medicine_name, dosage_description, common_usage, drug_category } = data;
-    if (!medicine_name || !dosage_description || !common_usage || !drug_category) {
+    if (!medicine_name || !dosage_description || !common_usage || !drug_category)
       throw AppError.badRequest('medicine_name, dosage_description, common_usage and drug_category are required');
-    }
+
     return this.medicineLibraryModel.create({
       medicine_name:         data.medicine_name.trim(),
       generic_name:          data.generic_name?.trim() || '',
@@ -290,7 +524,10 @@ export class PrescriptionService {
     const filter: any = {};
     if (query.search?.trim()) {
       const safe = escapeRegex(query.search.trim());
-      filter.$or = [{ medicine_name: { $regex: safe, $options: 'i' } }, { generic_name: { $regex: safe, $options: 'i' } }];
+      filter.$or = [
+        { medicine_name: { $regex: safe, $options: 'i' } },
+        { generic_name:  { $regex: safe, $options: 'i' } },
+      ];
     }
     if (query.drug_category?.trim()) {
       filter.drug_category = { $regex: escapeRegex(query.drug_category.trim()), $options: 'i' };
@@ -317,12 +554,12 @@ export class PrescriptionService {
     for (const key of allowed) {
       if (data[key] === undefined) continue;
       if (key === 'alternative_medicines') {
-        patch[key] = Array.isArray(data[key]) ? data[key].map((s: string) => s.trim()).filter(Boolean) : [];
+        patch[key] = Array.isArray(data[key])
+          ? data[key].map((s: string) => s.trim()).filter(Boolean) : [];
       } else {
         const trimmed = data[key]?.trim() || null;
-        if (trimmed === null && ['medicine_name', 'dosage_description', 'common_usage', 'drug_category'].includes(key)) {
+        if (trimmed === null && ['medicine_name', 'dosage_description', 'common_usage', 'drug_category'].includes(key))
           throw AppError.validation(`${key} cannot be empty`);
-        }
         patch[key] = trimmed;
       }
     }

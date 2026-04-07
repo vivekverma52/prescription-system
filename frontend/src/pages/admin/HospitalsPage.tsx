@@ -9,7 +9,7 @@ interface Hospital {
   name: string
   slug: string
   status: 'ACTIVE' | 'SUSPENDED'
-  created_at: string
+  created_at: string | null
   address_line1: string | null
   city: string | null
   state: string | null
@@ -204,93 +204,136 @@ export default function HospitalsPage() {
           <button className="btn btn-teal btn-sm" onClick={openCreate}>Add your first hospital</button>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
-          {hospitals.map(h => (
-            <div key={h.id} className="card" style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 0 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16 }}>
+          {hospitals.map(h => {
+            const isActive = h.status === 'ACTIVE'
+            const addrParts = [h.address_line1, h.city, h.state, h.pincode].filter(Boolean)
+            const createdDate = h.created_at ? new Date(h.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : null
 
-              {/* Header row: icon + name/badge + icon actions */}
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--teal-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" strokeWidth="2">
-                      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
-                    </svg>
+            return (
+              <div key={h.id} className="card" style={{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+                {/* Status bar accent */}
+                <div style={{ height: 3, background: isActive ? 'var(--teal)' : 'var(--border)', borderRadius: '12px 12px 0 0' }} />
+
+                <div style={{ padding: '18px 20px 0', display: 'flex', flexDirection: 'column', flex: 1 }}>
+
+                  {/* Header */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        width: 42, height: 42, borderRadius: 12, flexShrink: 0,
+                        background: isActive ? 'var(--teal-light)' : 'var(--cream-dark)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={isActive ? 'var(--teal)' : 'var(--ink-light)'} strokeWidth="1.8">
+                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                          <line x1="9" y1="22" x2="9" y2="12"/><line x1="15" y1="12" x2="15" y2="22"/>
+                        </svg>
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink)', margin: 0, lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {h.name}
+                        </p>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5 }}>
+                          <span style={{
+                            fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, letterSpacing: .4,
+                            background: isActive ? 'rgba(16,185,129,.12)' : 'rgba(107,114,128,.1)',
+                            color: isActive ? '#059669' : 'var(--ink-light)',
+                          }}>
+                            {isActive ? '● ACTIVE' : '○ SUSPENDED'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginLeft: 8 }}>
+                      <button title="Edit name" onClick={() => openEdit(h)} style={{
+                        background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8,
+                        color: 'var(--ink-light)', display: 'flex', transition: 'background .15s, color .15s',
+                      }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'var(--cream-dark)'; e.currentTarget.style.color = 'var(--ink)' }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--ink-light)' }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                      </button>
+                      <button title="Update address" onClick={() => openAddr(h)} style={{
+                        background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8,
+                        color: 'var(--ink-light)', display: 'flex', transition: 'background .15s, color .15s',
+                      }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'var(--cream-dark)'; e.currentTarget.style.color = 'var(--ink)' }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--ink-light)' }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+                        </svg>
+                      </button>
+                    </div>
                   </div>
-                  <div>
-                    <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)', margin: 0, lineHeight: 1.3 }}>{h.name}</p>
-                    <span style={{
-                      display: 'inline-block', marginTop: 3,
-                      fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, letterSpacing: .3,
-                      background: h.status === 'ACTIVE' ? 'rgba(16,185,129,.12)' : 'rgba(107,114,128,.1)',
-                      color: h.status === 'ACTIVE' ? '#10B981' : 'var(--ink-light)',
-                    }}>
-                      {h.status}
-                    </span>
+
+                  {/* Info rows */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16, flex: 1 }}>
+                    {/* Address */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: 7, background: 'var(--cream-dark)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ink-light)" strokeWidth="2">
+                          <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+                        </svg>
+                      </div>
+                      <div>
+                        <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--ink-light)', margin: '0 0 1px', textTransform: 'uppercase', letterSpacing: .4 }}>Address</p>
+                        {addrParts.length > 0 ? (
+                          <p style={{ fontSize: 12.5, color: 'var(--ink)', margin: 0, lineHeight: 1.5 }}>
+                            {addrParts.join(', ')}
+                          </p>
+                        ) : (
+                          <p style={{ fontSize: 12, color: 'var(--ink-light)', margin: 0, fontStyle: 'italic' }}>Not added yet</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Created date */}
+                    {createdDate && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ width: 28, height: 28, borderRadius: 7, background: 'var(--cream-dark)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ink-light)" strokeWidth="2">
+                            <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                          </svg>
+                        </div>
+                        <div>
+                          <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--ink-light)', margin: '0 0 1px', textTransform: 'uppercase', letterSpacing: .4 }}>Added on</p>
+                          <p style={{ fontSize: 12.5, color: 'var(--ink)', margin: 0 }}>{createdDate}</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Icon buttons: Edit, Address, Delete */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 8 }}>
-                  <button title="Edit" onClick={() => openEdit(h)} style={{
-                    background: 'none', border: 'none', cursor: 'pointer', padding: 6, borderRadius: 8,
-                    color: 'var(--ink-light)', display: 'flex', transition: 'background .15s',
-                  }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--cream-dark)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                {/* Footer */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderTop: '1px solid var(--border)', padding: '12px 20px 16px' }}>
+                  <button className="btn btn-teal btn-sm" style={{ flex: 1, justifyContent: 'center' }}
+                    onClick={() => navigate(`/admin/hospitals/${h.id}`)}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
                     </svg>
+                    View Staff
                   </button>
-                  <button title="Update address" onClick={() => openAddr(h)} style={{
-                    background: 'none', border: 'none', cursor: 'pointer', padding: 6, borderRadius: 8,
-                    color: 'var(--ink-light)', display: 'flex', transition: 'background .15s',
-                  }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--cream-dark)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
-                    </svg>
+                  <button onClick={() => toggleStatus(h)} style={{
+                    border: `1px solid ${isActive ? 'var(--border)' : 'rgba(16,185,129,.3)'}`,
+                    borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                    color: isActive ? 'var(--ink-light)' : 'var(--teal)',
+                    background: isActive ? 'none' : 'rgba(16,185,129,.06)',
+                    fontFamily: 'var(--font-sans)', transition: 'all .15s',
+                  }}>
+                    {isActive ? 'Suspend' : 'Activate'}
                   </button>
                 </div>
               </div>
-
-              {/* Details */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1, minHeight: 44 }}>
-                {(h.address_line1 || h.city) ? (
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ink-light)" strokeWidth="2" style={{ marginTop: 1, flexShrink: 0 }}>
-                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
-                    </svg>
-                    <span style={{ fontSize: 12, color: 'var(--ink-light)', lineHeight: 1.5 }}>
-                      {[h.address_line1, h.city, h.state, h.pincode].filter(Boolean).join(', ')}
-                    </span>
-                  </div>
-                ) : (
-                  <span style={{ fontSize: 12, color: 'var(--ink-light)', fontStyle: 'italic' }}>No address added yet</span>
-                )}
-              </div>
-
-              {/* Footer: primary action + status toggle */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 14 }}>
-                <button className="btn btn-teal btn-sm" style={{ flex: 1 }}
-                  onClick={() => navigate(`/admin/hospitals/${h.id}`)}>
-                  View Staff
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M5 12h14M12 5l7 7-7 7"/>
-                  </svg>
-                </button>
-                <button onClick={() => toggleStatus(h)} style={{
-                  background: 'none', border: '1px solid var(--border)', borderRadius: 8,
-                  padding: '5px 12px', fontSize: 12, fontWeight: 500, cursor: 'pointer',
-                  color: h.status === 'ACTIVE' ? 'var(--ink-light)' : 'var(--teal)',
-                  fontFamily: 'var(--font-sans)',
-                }}>
-                  {h.status === 'ACTIVE' ? 'Suspend' : 'Activate'}
-                </button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

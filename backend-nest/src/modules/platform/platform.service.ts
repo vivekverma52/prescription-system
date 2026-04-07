@@ -2,12 +2,13 @@
  * PlatformService — Level 0
  * Covers: Superadmin management + Plans table
  */
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { Pool } from 'mysql2/promise';
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { MYSQL_POOL } from '../../database/database.module';
 import { AppError } from '../../common/errors/app.error';
+import { PlatformRepository } from './platform.repository';
 
 const VALID_STATUSES = ['ACTIVE', 'SUSPENDED'];
 
@@ -35,13 +36,19 @@ const PLAN_LIMITS: Record<string, { prescription_limit: number; team_limit: numb
 
 @Injectable()
 export class PlatformService {
-  constructor(@Inject(MYSQL_POOL) private readonly pool: Pool) {}
+  private readonly logger = new Logger(PlatformService.name);
+
+  constructor(
+    @Inject(MYSQL_POOL) private readonly pool: Pool,
+    private readonly platformRepository: PlatformRepository,
+  ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
   // PLANS
   // ═══════════════════════════════════════════════════════════════════════
 
   async listPlans() {
+    this.logger.log(`[listPlans]`);
     const [rows]: any = await this.pool.execute(
       'SELECT * FROM plans WHERE is_active = 1 ORDER BY price_monthly ASC',
     );
@@ -143,6 +150,7 @@ export class PlatformService {
   }
 
   async listOrgs(query: { search?: string; plan?: string; status?: string }) {
+    this.logger.log(`[listOrgs] search=${query.search} plan=${query.plan} status=${query.status}`);
     const { search, plan, status } = query;
     if (status && !VALID_STATUSES.includes(status.toUpperCase())) throw AppError.validation('Invalid status filter');
 
@@ -197,6 +205,7 @@ export class PlatformService {
   }
 
   async createOrg(body: any) {
+    this.logger.log(`[createOrg] name=${body.name} plan=${body.plan}`);
     const { org_name, plan = 'FREE', admin_name, admin_email, admin_password,
             address, phone, website, pharmacist_name, pharmacist_email, pharmacist_password } = body;
 

@@ -6,15 +6,23 @@ import {
   Delete,
   Param,
   Body,
-  Res,
+  HttpCode,
+  HttpStatus,
   UseGuards,
 } from '@nestjs/common';
-import { Response } from 'express';
 import { OrganizationService } from './organization.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { OrgAdminGuard } from '../../common/guards/org-admin.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { HttpMessage } from '../../common/decorators/message.decorator';
+import { AuthenticatedUser } from '../../common/types/authenticated-user.interface';
 import { AppError } from '../../common/errors/app.error';
+import { UpdateOrgDto } from './dto/update-org.dto';
+import { CreateMemberDto } from './dto/create-member.dto';
+import { ChangePlanDto } from './dto/change-plan.dto';
+import { CreateRoleDto } from './dto/create-role.dto';
+import { UpdateRoleDto } from './dto/update-role.dto';
+import { AssignRoleDto } from './dto/assign-role.dto';
 
 // ── Organizations Controller ──────────────────────────────────────────────────
 
@@ -24,48 +32,46 @@ export class OrganizationsController {
   constructor(private readonly organizationService: OrganizationService) {}
 
   @Get('me')
-  async getOrg(@CurrentUser() user: any, @Res() res: Response) {
+  getOrg(@CurrentUser() user: AuthenticatedUser) {
     if (!user.orgId) throw AppError.notFound('Organization');
-    const org = await this.organizationService.getOrg(user.orgId);
-    return res.status(200).json({ success: true, data: org });
+    return this.organizationService.getOrg(user.orgId);
   }
 
   @Put('me')
   @UseGuards(OrgAdminGuard)
-  async updateOrg(@CurrentUser() user: any, @Body() body: any, @Res() res: Response) {
-    const org = await this.organizationService.updateOrg(user.userId, user.orgId, body);
-    return res.status(200).json({ success: true, message: 'Organization updated', data: org });
+  @HttpMessage('Organization updated')
+  updateOrg(@CurrentUser() user: AuthenticatedUser, @Body() dto: UpdateOrgDto) {
+    return this.organizationService.updateOrg(user.userId, user.orgId, dto);
   }
 
   @Get('me/team')
-  async getTeam(@CurrentUser() user: any, @Res() res: Response) {
-    const team = await this.organizationService.getTeam(user.orgId);
-    return res.status(200).json({ success: true, data: team });
+  getTeam(@CurrentUser() user: AuthenticatedUser) {
+    return this.organizationService.getTeam(user.orgId);
   }
 
   @Post('me/members')
   @UseGuards(OrgAdminGuard)
-  async createMember(@CurrentUser() user: any, @Body() body: any, @Res() res: Response) {
-    const member = await this.organizationService.createMember(user.userId, user.orgId, body);
-    return res.status(201).json({ success: true, message: 'Member created', data: member });
+  @HttpCode(HttpStatus.CREATED)
+  @HttpMessage('Member created')
+  createMember(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateMemberDto) {
+    return this.organizationService.createMember(user.userId, user.orgId, dto);
   }
 
   @Delete('me/members/:memberId')
   @UseGuards(OrgAdminGuard)
-  async removeMember(
+  @HttpMessage('Member removed')
+  removeMember(
     @Param('memberId') memberId: string,
-    @CurrentUser() user: any,
-    @Res() res: Response,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    await this.organizationService.removeMember(user.userId, user.orgId, memberId);
-    return res.status(200).json({ success: true, message: 'Member removed', data: null });
+    return this.organizationService.removeMember(user.userId, user.orgId, memberId);
   }
 
   @Put('me/plan')
   @UseGuards(OrgAdminGuard)
-  async changePlan(@CurrentUser() user: any, @Body() body: { plan: string }, @Res() res: Response) {
-    const result = await this.organizationService.changePlan(user.userId, user.orgId, body.plan);
-    return res.status(200).json({ success: true, message: result.message, data: result });
+  @HttpMessage('Plan updated')
+  changePlan(@CurrentUser() user: AuthenticatedUser, @Body() dto: ChangePlanDto) {
+    return this.organizationService.changePlan(user.userId, user.orgId, dto.plan);
   }
 }
 
@@ -77,38 +83,41 @@ export class RolesController {
   constructor(private readonly organizationService: OrganizationService) {}
 
   @Get()
-  async list(@CurrentUser() user: any, @Res() res: Response) {
-    const roles = await this.organizationService.listRoles(user.orgId);
-    return res.status(200).json({ success: true, data: roles });
+  list(@CurrentUser() user: AuthenticatedUser) {
+    return this.organizationService.listRoles(user.orgId);
   }
 
   @Post()
   @UseGuards(OrgAdminGuard)
-  async create(@CurrentUser() user: any, @Body() body: any, @Res() res: Response) {
+  @HttpCode(HttpStatus.CREATED)
+  @HttpMessage('Role created')
+  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateRoleDto) {
     if (!user.orgId) throw AppError.forbidden('Organization context required');
-    const role = await this.organizationService.createRole(user.orgId, body);
-    return res.status(201).json({ success: true, message: 'Role created', data: role });
+    return this.organizationService.createRole(user.orgId, dto);
   }
 
   @Put(':id')
   @UseGuards(OrgAdminGuard)
-  async update(@Param('id') id: string, @CurrentUser() user: any, @Body() body: any, @Res() res: Response) {
-    const role = await this.organizationService.updateRole(id, user.orgId, body);
-    return res.status(200).json({ success: true, message: 'Role updated', data: role });
+  @HttpMessage('Role updated')
+  update(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateRoleDto,
+  ) {
+    return this.organizationService.updateRole(id, user.orgId, dto);
   }
 
   @Delete(':id')
   @UseGuards(OrgAdminGuard)
-  async remove(@Param('id') id: string, @CurrentUser() user: any, @Res() res: Response) {
-    await this.organizationService.removeRole(id, user.orgId);
-    return res.status(200).json({ success: true, message: 'Role deleted', data: null });
+  @HttpMessage('Role deleted')
+  remove(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.organizationService.removeRole(id, user.orgId);
   }
 
   @Post('assign')
   @UseGuards(OrgAdminGuard)
-  async assign(@CurrentUser() user: any, @Body() body: any, @Res() res: Response) {
-    const result = await this.organizationService.assignRole(user.orgId, body);
-    return res.status(200).json({ success: true, message: 'Role assigned', data: result });
+  @HttpMessage('Role assigned')
+  assign(@CurrentUser() user: AuthenticatedUser, @Body() dto: AssignRoleDto) {
+    return this.organizationService.assignRole(user.orgId, dto);
   }
 }
-

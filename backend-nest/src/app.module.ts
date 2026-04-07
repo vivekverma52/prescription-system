@@ -6,7 +6,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { join } from 'path';
 import { DatabaseModule } from './database/database.module';
 import { S3Module } from './common/s3/s3.module';
+import { SqsModule } from './common/sqs/sqs.module';
 import { LoggerModule } from './common/logger/logger.module';
+import { MailModule } from './common/mail/mail.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { PlatformModule } from './modules/platform/platform.module';
 import { OrganizationModule } from './modules/organization/organization.module';
@@ -25,13 +27,11 @@ import { OrgUsageCounter }   from './database/entities/org-usage-counter.entity'
 import { DoctorProfile }     from './database/entities/doctor-profile.entity';
 import { PharmacistProfile } from './database/entities/pharmacist-profile.entity';
 import { RefreshToken }      from './database/entities/refresh-token.entity';
-import { Prescription }      from './database/entities/prescription.entity';
-
 const ALL_ENTITIES = [
   Plan, User, Organization, Hospital, HospitalAddress,
   Role, UserRole, OrgUsageCounter,
   DoctorProfile, PharmacistProfile,
-  RefreshToken, Prescription,
+  RefreshToken,
 ];
 
 @Module({
@@ -101,6 +101,12 @@ const ALL_ENTITIES = [
 
     // S3 service
     S3Module,
+
+    // SQS producer + consumer
+    SqsModule,
+
+    // Mail service
+    MailModule,
 
     // Bounded contexts
     AuthModule,

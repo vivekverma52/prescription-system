@@ -1,4 +1,6 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Organization } from './organization.entity';
+import { Hospital } from './hospital.entity';
 
 @Entity('org_usage_counters')
 export class OrgUsageCounter {
@@ -25,4 +27,13 @@ export class OrgUsageCounter {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @ManyToOne(() => Organization, (org) => org.usageCounters)
+  @JoinColumn({ name: 'org_id' })
+  organization: Organization;
+
+  @ManyToOne(() => Hospital, (hospital) => hospital.usageCounters, { nullable: true })
+  @JoinColumn({ name: 'hospital_id' })
+  hospital: Hospital | null;
 }

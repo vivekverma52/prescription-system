@@ -1,4 +1,7 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Organization } from './organization.entity';
+import { Hospital } from './hospital.entity';
+import { User } from './user.entity';
 
 export type PrescriptionStatus = 'UPLOADED' | 'CLAIMED' | 'PROCESSING' | 'RENDERED' | 'SENT';
 
@@ -39,6 +42,9 @@ export class Prescription {
   @Column({ type: 'varchar', length: 20, nullable: true })
   patient_phone: string | null;
 
+  @Column({ type: 'varchar', length: 255, nullable: true, unique: true })
+  patient_uid: string | null;
+
   @Column({ type: 'varchar', length: 500, nullable: true })
   image_key: string | null;
 
@@ -75,4 +81,17 @@ export class Prescription {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @ManyToOne(() => Organization, { nullable: true })
+  @JoinColumn({ name: 'org_id' })
+  organization: Organization | null;
+
+  @ManyToOne(() => Hospital, { nullable: true })
+  @JoinColumn({ name: 'hospital_id' })
+  hospital: Hospital | null;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'doctor_id' })
+  doctor: User;
 }

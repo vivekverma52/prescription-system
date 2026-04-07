@@ -1,4 +1,5 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, OneToMany } from 'typeorm';
+import { Organization } from './organization.entity';
 
 export type PlanName = 'FREE' | 'PRO' | 'GROWTH' | 'ENTERPRISE';
 
@@ -42,4 +43,8 @@ export class Plan {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @OneToMany(() => Organization, (org) => org.plan)
+  organizations: Organization[];
 }

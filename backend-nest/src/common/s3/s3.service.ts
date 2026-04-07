@@ -61,8 +61,12 @@ export class S3Service {
       throw readable;
     }
 
-    const url = `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
-    this.logger.log(`[S3] Upload successful: ${url}`);
-    return url;
+    this.logger.log(`[S3] Upload successful: key=${key}`);
+    return key;
+  }
+
+  /** Build the public HTTPS URL from a stored S3 key. */
+  getObjectUrl(key: string): string {
+    return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
   }
 }

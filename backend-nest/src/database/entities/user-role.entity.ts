@@ -1,4 +1,6 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { User } from './user.entity';
+import { Role } from './role.entity';
 
 @Entity('user_roles')
 export class UserRole {
@@ -16,4 +18,13 @@ export class UserRole {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @ManyToOne(() => User, (user) => user.userRoles)
+  @JoinColumn({ name: 'user_id' })
+  user: User;
+
+  @ManyToOne(() => Role, (role) => role.userRoles)
+  @JoinColumn({ name: 'role_id' })
+  role: Role;
 }

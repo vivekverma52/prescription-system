@@ -8,6 +8,7 @@ import { AppLogger } from './common/logger/app-logger.service';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
+import { AppDataSource } from './database/data-source';
 import helmet from 'helmet';
 // cookie-parser and express-mongo-sanitize ship CommonJS without a default export;
 // require() is the correct call here with this project's tsconfig (no esModuleInterop).
@@ -16,7 +17,20 @@ const cookieParser = require('cookie-parser') as () => any;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const mongoSanitize = require('express-mongo-sanitize') as { sanitize: (v: any) => any };
 
+async function runMigrations() {
+  await AppDataSource.initialize();
+  const ran = await AppDataSource.runMigrations();
+  if (ran.length) {
+    process.stdout.write(`[Migrations] Ran ${ran.length} migration(s): ${ran.map((m) => m.name).join(', ')}\n`);
+  } else {
+    process.stdout.write('[Migrations] All up to date.\n');
+  }
+  await AppDataSource.destroy();
+}
+
 async function bootstrap() {
+  await runMigrations();
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
   });

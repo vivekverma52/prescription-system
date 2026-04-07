@@ -1,4 +1,10 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, OneToMany, OneToOne, JoinColumn } from 'typeorm';
+import { Organization } from './organization.entity';
+import { HospitalAddress } from './hospital-address.entity';
+import { User } from './user.entity';
+import { DoctorProfile } from './doctor-profile.entity';
+import { PharmacistProfile } from './pharmacist-profile.entity';
+import { OrgUsageCounter } from './org-usage-counter.entity';
 
 export type HospitalStatus = 'ACTIVE' | 'SUSPENDED';
 
@@ -42,6 +48,26 @@ export class Hospital {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @ManyToOne(() => Organization, (org) => org.hospitals)
+  @JoinColumn({ name: 'org_id' })
+  organization: Organization;
+
+  @OneToOne(() => HospitalAddress, (addr) => addr.hospital, { nullable: true })
+  address: HospitalAddress | null;
+
+  @OneToMany(() => User, (user) => user.hospital)
+  staff: User[];
+
+  @OneToMany(() => DoctorProfile, (dp) => dp.hospital)
+  doctorProfiles: DoctorProfile[];
+
+  @OneToMany(() => PharmacistProfile, (pp) => pp.hospital)
+  pharmacistProfiles: PharmacistProfile[];
+
+  @OneToMany(() => OrgUsageCounter, (counter) => counter.hospital)
+  usageCounters: OrgUsageCounter[];
 }
 
 // Read-model helper (not a DB entity — used for JOIN result typing)

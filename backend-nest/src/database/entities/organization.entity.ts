@@ -1,4 +1,9 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
+import { Plan } from './plan.entity';
+import { User } from './user.entity';
+import { Hospital } from './hospital.entity';
+import { Role } from './role.entity';
+import { OrgUsageCounter } from './org-usage-counter.entity';
 
 export type OrgStatus    = 'ACTIVE' | 'SUSPENDED' | 'TRIAL';
 export type BillingCycle = 'MONTHLY' | 'YEARLY';
@@ -52,4 +57,25 @@ export class Organization {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @ManyToOne(() => Plan, (plan) => plan.organizations, { nullable: true })
+  @JoinColumn({ name: 'plan_id' })
+  plan: Plan | null;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'owner_id' })
+  owner: User | null;
+
+  @OneToMany(() => Hospital, (hospital) => hospital.organization)
+  hospitals: Hospital[];
+
+  @OneToMany(() => User, (user) => user.organization)
+  users: User[];
+
+  @OneToMany(() => Role, (role) => role.organization)
+  roles: Role[];
+
+  @OneToMany(() => OrgUsageCounter, (counter) => counter.organization)
+  usageCounters: OrgUsageCounter[];
 }

@@ -1,4 +1,11 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, OneToOne, OneToMany, JoinColumn } from 'typeorm';
+import { Organization } from './organization.entity';
+import { Hospital } from './hospital.entity';
+import { Role } from './role.entity';
+import { DoctorProfile } from './doctor-profile.entity';
+import { PharmacistProfile } from './pharmacist-profile.entity';
+import { RefreshToken } from './refresh-token.entity';
+import { UserRole as UserRoleEntity } from './user-role.entity';
 
 export type UserRole   = 'SUPERADMIN' | 'ORG_ADMIN' | 'DOCTOR' | 'PHARMACIST';
 export type UserStatus = 'ACTIVE' | 'SUSPENDED' | 'INVITED';
@@ -55,4 +62,29 @@ export class User {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @ManyToOne(() => Organization, (org) => org.users, { nullable: true })
+  @JoinColumn({ name: 'org_id' })
+  organization: Organization | null;
+
+  @ManyToOne(() => Hospital, (hospital) => hospital.staff, { nullable: true })
+  @JoinColumn({ name: 'hospital_id' })
+  hospital: Hospital | null;
+
+  @ManyToOne(() => Role, { nullable: true })
+  @JoinColumn({ name: 'custom_role_id' })
+  customRole: Role | null;
+
+  @OneToOne(() => DoctorProfile, (dp) => dp.user, { nullable: true })
+  doctorProfile: DoctorProfile | null;
+
+  @OneToOne(() => PharmacistProfile, (pp) => pp.user, { nullable: true })
+  pharmacistProfile: PharmacistProfile | null;
+
+  @OneToMany(() => RefreshToken, (rt) => rt.user)
+  refreshTokens: RefreshToken[];
+
+  @OneToMany(() => UserRoleEntity, (ur) => ur.user)
+  userRoles: UserRoleEntity[];
 }

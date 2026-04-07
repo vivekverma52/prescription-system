@@ -9,15 +9,18 @@ import {
   MedicinePrescription,
   MedicinePrescriptionSchema,
 } from './schemas/medicine-prescription.schema';
+import { Prescription, PrescriptionSchema } from './schemas/prescription.schema';
+import { PrescriptionRepository } from './prescription.repository';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
+      { name: Prescription.name,         schema: PrescriptionSchema },
       { name: MedicinePrescription.name, schema: MedicinePrescriptionSchema },
     ]),
   ],
   controllers: [PrescriptionsController, MedicinePrescriptionsController],
-  providers: [PrescriptionService],
+  providers: [PrescriptionRepository, PrescriptionService],
   exports: [PrescriptionService],
 })
 export class PrescriptionModule {}

@@ -1,4 +1,5 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, OneToOne, JoinColumn } from 'typeorm';
+import { Hospital } from './hospital.entity';
 
 @Entity('hospital_addresses')
 export class HospitalAddress {
@@ -31,4 +32,9 @@ export class HospitalAddress {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @OneToOne(() => Hospital, (hospital) => hospital.address)
+  @JoinColumn({ name: 'hospital_id' })
+  hospital: Hospital;
 }

@@ -1,4 +1,7 @@
-import { Entity, PrimaryColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
+import { Organization } from './organization.entity';
+import { Hospital } from './hospital.entity';
+import { UserRole } from './user-role.entity';
 
 export interface RolePermissions {
   write_rx?:        boolean;
@@ -49,4 +52,16 @@ export class Role {
 
   @CreateDateColumn({ type: 'timestamp' })
   created_at: Date;
+
+  // ── Relations ──────────────────────────────────────────────────────────
+  @ManyToOne(() => Organization, (org) => org.roles, { nullable: true })
+  @JoinColumn({ name: 'org_id' })
+  organization: Organization | null;
+
+  @ManyToOne(() => Hospital, { nullable: true })
+  @JoinColumn({ name: 'hospital_id' })
+  hospital: Hospital | null;
+
+  @OneToMany(() => UserRole, (ur) => ur.role)
+  userRoles: UserRole[];
 }
