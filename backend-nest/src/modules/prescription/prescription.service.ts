@@ -72,6 +72,9 @@ export class PrescriptionService implements OnModuleInit {
   onModuleInit() {
     const resultQueueUrl = this.configService.get<string>('SQS_RESULT_QUEUE_URL');
     this.sqsService.startPolling(resultQueueUrl, (body) => this.handleResultMessage(body));
+
+    const videoResultQueueUrl = this.configService.get<string>('SQS_VIDEO_RESULT_QUEUE_URL');
+    this.sqsService.startPolling(videoResultQueueUrl, (body) => this.handleVideoResultMessage(body));
   }
 
   /**
@@ -163,6 +166,71 @@ export class PrescriptionService implements OnModuleInit {
       { $set: { interpreted_data: newInterpretedData } },
     );
     this.logger.log(`[SQS Consumer] OCR data saved — ${processingSummary?.medicinesFound ?? 0} medicines found`);
+  }
+
+  /**
+   * SQS consumer — video-processing-receive-queue handler.
+   *
+   * Accepts any of these field name variants (sent by video processing service):
+   *   request_id | id | prescriptionId | prescription_id
+   *   video_url  | videoUrl | url | video_key | videoKey
+   *   status     — optional; if present and not "success"/"completed", skipped
+   */
+  private async handleVideoResultMessage(body: Record<string, unknown>): Promise<void> {
+    this.logger.log(`[Video Consumer] Received raw: ${JSON.stringify(body)}`);
+
+    // ── status check (skip only hard error statuses, accept missing status) ──
+    const status = (body.status as string | undefined)?.toLowerCase();
+    if (status && status !== 'success' && status !== 'completed' && status !== 'done') {
+      const errMsg = body.errorMessage ?? body.error ?? body.message ?? '';
+      this.logger.warn(`[Video Consumer] status=${status} error=${errMsg} — skipping`);
+      return;
+    }
+
+    // ── resolve prescription id (try multiple field names) ──────────────────
+    const prescriptionId = (
+      body.request_id ?? body.id ?? body.prescriptionId ?? body.prescription_id
+    ) as string | undefined;
+
+    if (!prescriptionId?.trim()) {
+      this.logger.warn(`[Video Consumer] Cannot resolve prescription id — keys: ${Object.keys(body).join(', ')}`);
+      return;
+    }
+
+    // ── resolve video url (try multiple field names) ─────────────────────────
+    const rawVideoUrl = (
+      body.s3_url ?? body.video_url ?? body.videoUrl ?? body.url ?? body.video_key ?? body.videoKey
+    ) as string | undefined;
+
+    if (!rawVideoUrl?.trim()) {
+      this.logger.warn(`[Video Consumer] Cannot resolve video URL for id=${prescriptionId} — keys: ${Object.keys(body).join(', ')}`);
+      return;
+    }
+
+    // ── find prescription ───────────────────────────────────────────────────
+    const prescription = await this.prescriptionModel.findOne({ id: prescriptionId.trim() }).lean();
+    if (!prescription) {
+      this.logger.warn(`[Video Consumer] No prescription found for id=${prescriptionId}`);
+      return;
+    }
+
+    // ── extract S3 key — prefer explicit s3_key field, then strip URL ────────
+    const explicitKey = body.s3_key as string | undefined;
+    let videoKey: string;
+    if (explicitKey?.trim()) {
+      videoKey = explicitKey.trim();
+    } else {
+      // Strip presigned query params and bucket hostname from full URL
+      const stripped = rawVideoUrl.trim().split('?')[0];
+      const urlMatch = stripped.match(/\.amazonaws\.com\/(.+)$/);
+      videoKey = urlMatch ? urlMatch[1] : stripped;
+    }
+
+    await this.prescriptionModel.updateOne(
+      { id: prescription.id },
+      { $set: { video_key: videoKey, status: 'RENDERED' } },
+    );
+    this.logger.log(`[Video Consumer] Video saved — prescription=${prescription.id} key=${videoKey}`);
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -414,6 +482,21 @@ export class PrescriptionService implements OnModuleInit {
     };
   }
 
+  async getVideoDownloadUrl(id: string, params: { role: string; userId: string; orgId: string | null }) {
+    const { role, userId, orgId } = params;
+    const prescription = await this.prescriptionModel
+      .findOne({ $or: [{ id }, { access_token: id }] })
+      .lean();
+    if (!prescription) throw AppError.notFound('Prescription');
+    if (role === 'DOCTOR'     && prescription.doctor_id !== userId)      throw AppError.forbidden();
+    if (role === 'PHARMACIST' && orgId && prescription.org_id !== orgId) throw AppError.forbidden();
+    if (!prescription.video_key) throw AppError.badRequest('Video not ready yet');
+
+    const filename = `rx-${prescription.patient_name.replace(/\s+/g, '-')}.mp4`;
+    const url = await this.s3Service.getPresignedDownloadUrl(prescription.video_key, filename);
+    return { url, filename };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // PER-PRESCRIPTION MEDICINES (stored inside interpreted_data.medicines)
   // ═══════════════════════════════════════════════════════════════════════
@@ -549,7 +632,7 @@ export class PrescriptionService implements OnModuleInit {
 
   async updateMedicineLibraryEntry(id: string, data: any) {
     if (!mongoose.Types.ObjectId.isValid(id)) throw AppError.badRequest('Invalid Medicine ID format');
-    const allowed = ['medicine_name', 'generic_name', 'dosage_description', 'common_usage', 'drug_category', 'alternative_medicines'];
+    const allowed = ['medicine_name', 'generic_name', 'dosage_description', 'common_usage', 'drug_category', 'alternative_medicines', 'medicine_image', 'medicine_image_2', 'medicine_image_3'];
     const patch: any = {};
     for (const key of allowed) {
       if (data[key] === undefined) continue;
@@ -569,10 +652,12 @@ export class PrescriptionService implements OnModuleInit {
     return doc;
   }
 
-  async updateMedicineLibraryImage(id: string, imageUrl: string) {
+  async updateMedicineLibraryImage(id: string, imageUrl: string, imageField: 'medicine_image' | 'medicine_image_2' | 'medicine_image_3' = 'medicine_image') {
     if (!mongoose.Types.ObjectId.isValid(id)) throw AppError.badRequest('Invalid Medicine ID format');
     if (!imageUrl) throw AppError.badRequest('Image URL is required');
-    const doc = await this.medicineLibraryModel.findByIdAndUpdate(id, { medicine_image: imageUrl }, { new: true });
+    const allowed = ['medicine_image', 'medicine_image_2', 'medicine_image_3'];
+    if (!allowed.includes(imageField)) throw AppError.badRequest('Invalid image field');
+    const doc = await this.medicineLibraryModel.findByIdAndUpdate(id, { [imageField]: imageUrl }, { new: true });
     if (!doc) throw AppError.notFound('Medicine');
     return doc;
   }

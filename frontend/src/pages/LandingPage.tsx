@@ -776,7 +776,7 @@ function Navbar({ onLogin }: { onLogin: () => void }) {
     <nav className="ms-nav">
       <div className="ms-logo" onClick={onLogin}>
         <div className="ms-logo-icon"><span>Rx</span></div>
-        MedScript
+        Medi lingua vani
       </div>
       <ul className="ms-nav-links">
         {["Features", "Pricing", "About"].map(l => (
@@ -932,9 +932,9 @@ function Footer() {
         <div className="ms-logo-icon" style={{ width: 24, height: 24 }}>
           <span style={{ fontSize: 10 }}>Rx</span>
         </div>
-        MedScript
+        Medi lingua Vani
       </div>
-      <p className="ms-footer-copy">© 2024 Askim Technologies Pvt. Ltd. All rights reserved.</p>
+      <p className="ms-footer-copy">© 2024 Exato Technologies Pvt. Ltd. All rights reserved.</p>
       <div className="ms-footer-links">
         <a href="#">Privacy</a>
         <a href="#">Terms</a>

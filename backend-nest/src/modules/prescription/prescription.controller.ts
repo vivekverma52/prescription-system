@@ -142,6 +142,20 @@ export class PrescriptionsController {
     return res.status(200).json({ success: true, data: prescription });
   }
 
+  @Get(':id/download-video')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('DOCTOR', 'PHARMACIST')
+  async downloadVideo(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+    @Res() res: Response,
+  ) {
+    const result = await this.prescriptionService.getVideoDownloadUrl(id, {
+      role: user.role, userId: user.userId, orgId: user.orgId ?? null,
+    });
+    return res.status(200).json({ success: true, data: result });
+  }
+
   @Put(':id/render')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('DOCTOR', 'PHARMACIST')
@@ -292,12 +306,15 @@ export class MedicinePrescriptionsController {
   async uploadImage(
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
+    @Query('field') field: string,
     @Res() res: Response,
   ) {
     if (!file) throw AppError.badRequest('No image file provided');
+    const validFields = ['medicine_image', 'medicine_image_2', 'medicine_image_3'];
+    const imageField = validFields.includes(field) ? field as any : 'medicine_image';
     const key = await this.s3Service.uploadToS3(file.buffer, file.originalname, file.mimetype);
     const imageUrl = this.s3Service.getObjectUrl(key);
-    const doc = await this.prescriptionService.updateMedicineLibraryImage(id, imageUrl);
+    const doc = await this.prescriptionService.updateMedicineLibraryImage(id, imageUrl, imageField);
     return res.status(200).json({ success: true, message: 'Image uploaded', data: doc });
   }
 

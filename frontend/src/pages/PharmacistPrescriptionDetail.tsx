@@ -269,39 +269,198 @@ function MedicineForm({
 }
 
 // ── OCR Medicine inline edit / add form ──────────────────────────────────────
-const EMPTY_OCR = { medicine_name: '', dosage: '', instructions: '', duration: '' }
+const TIME_SLOTS = ['Morning', 'Afternoon', 'Night'] as const
+const FOOD_OPTIONS = ['Before food', 'After food', 'With food'] as const
+
+const EMPTY_OCR = {
+  medicine_name: '',
+  dosage: '',
+  instructions: '',
+  duration: '',
+  time_of_day: [] as string[],
+  with_food: '',
+  text: { en: '' },
+}
 
 function OcrMedicineForm({ initial, onSave, onCancel }: {
   initial: typeof EMPTY_OCR
   onSave: (data: typeof EMPTY_OCR) => void
   onCancel: () => void
 }) {
-  const [form, setForm] = useState(initial)
-  const set = (k: keyof typeof EMPTY_OCR) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm(f => ({ ...f, [k]: e.target.value }))
+  const [form, setForm] = useState<typeof EMPTY_OCR>({
+    ...EMPTY_OCR,
+    ...initial,
+    time_of_day: Array.isArray(initial.time_of_day)
+      ? initial.time_of_day
+      : initial.time_of_day ? (initial.time_of_day as string).split(',').map(s => s.trim()).filter(Boolean) : [],
+    text: initial.text ?? { en: '' },
+  })
+  const [suggestions, setSuggestions] = useState<string[]>([])
+  const [showSug, setShowSug] = useState(false)
+  const nameRef = useRef<HTMLInputElement>(null)
+  const sugRef  = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (sugRef.current && !sugRef.current.contains(e.target as Node) && e.target !== nameRef.current)
+        setShowSug(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const searchMedicines = async (q: string) => {
+    setForm(f => ({ ...f, medicine_name: q }))
+    if (q.length < 1) { setSuggestions([]); setShowSug(false); return }
+    try {
+      const res = await api.get(`/prescriptions/medicines/search?q=${encodeURIComponent(q)}`)
+      const data: string[] = res.data.data ?? []
+      setSuggestions(data)
+      setShowSug(data.length > 0)
+    } catch { setSuggestions([]) }
+  }
+
+  const setField = (k: 'dosage' | 'instructions' | 'duration' | 'with_food') =>
+    (e: React.ChangeEvent<HTMLInputElement>) => setForm(f => ({ ...f, [k]: e.target.value }))
+
+  const toggleTime = (slot: string) =>
+    setForm(f => ({
+      ...f,
+      time_of_day: f.time_of_day.includes(slot)
+        ? f.time_of_day.filter(t => t !== slot)
+        : [...f.time_of_day, slot],
+    }))
+
+  const accentColor = 'rgb(99,102,241)'
+  const accentLight = 'rgba(99,102,241,.12)'
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+      {/* Medicine name + autocomplete from MongoDB */}
+      <div style={{ position: 'relative' }}>
         <label style={lbl}>Medicine Name *</label>
-        <input style={field} autoFocus value={form.medicine_name} onChange={set('medicine_name')} placeholder="e.g. Paracetamol 500mg" />
+        <input
+          ref={nameRef}
+          style={field}
+          autoFocus
+          autoComplete="off"
+          value={form.medicine_name}
+          placeholder="Type to search medicines…"
+          onChange={e => searchMedicines(e.target.value)}
+          onFocus={() => form.medicine_name && suggestions.length > 0 && setShowSug(true)}
+        />
+        {showSug && suggestions.length > 0 && (
+          <div ref={sugRef} style={{
+            position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200, marginTop: 2,
+            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10,
+            boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: 180, overflowY: 'auto',
+          }}>
+            {suggestions.map(s => (
+              <button key={s} type="button"
+                onClick={() => { setForm(f => ({ ...f, medicine_name: s })); setShowSug(false) }}
+                style={{
+                  width: '100%', textAlign: 'left', padding: '9px 14px',
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  fontSize: 13, color: 'var(--ink)', fontFamily: 'var(--font-sans)',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = accentLight)}
+                onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Dosage + Duration */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <div>
           <label style={lbl}>Dosage</label>
-          <input style={field} value={form.dosage} onChange={set('dosage')} placeholder="e.g. 5 ml tid" />
+          <input style={field} value={form.dosage} onChange={setField('dosage')} placeholder="e.g. 1 tablet" />
         </div>
         <div>
           <label style={lbl}>Duration</label>
-          <input style={field} value={form.duration} onChange={set('duration')} placeholder="e.g. 5 days" />
+          <input style={field} value={form.duration} onChange={setField('duration')} placeholder="e.g. 5 days" />
         </div>
       </div>
+
+      {/* Time of day */}
+      <div>
+        <label style={lbl}>Time of Day</label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {TIME_SLOTS.map(slot => {
+            const checked = form.time_of_day.includes(slot)
+            return (
+              <button key={slot} type="button" onClick={() => toggleTime(slot)} style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                padding: '8px 0', borderRadius: 9,
+                border: `1.5px solid ${checked ? accentColor : 'var(--border)'}`,
+                background: checked ? accentLight : 'var(--surface)',
+                cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                color: checked ? accentColor : 'var(--ink-light)',
+                fontFamily: 'var(--font-sans)', transition: 'all .12s',
+              }}>
+                <span style={{
+                  width: 14, height: 14, borderRadius: 4,
+                  border: `2px solid ${checked ? accentColor : 'var(--border)'}`,
+                  background: checked ? accentColor : 'none',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}>
+                  {checked && <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5"><path d="M20 6L9 17l-5-5"/></svg>}
+                </span>
+                {slot}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* With food */}
+      <div>
+        <label style={lbl}>With Food</label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {FOOD_OPTIONS.map(opt => {
+            const selected = form.with_food === opt
+            return (
+              <button key={opt} type="button"
+                onClick={() => setForm(f => ({ ...f, with_food: selected ? '' : opt }))}
+                style={{
+                  flex: 1, padding: '7px 0', borderRadius: 9, fontSize: 11, fontWeight: 600,
+                  border: `1.5px solid ${selected ? accentColor : 'var(--border)'}`,
+                  background: selected ? accentLight : 'var(--surface)',
+                  color: selected ? accentColor : 'var(--ink-light)',
+                  cursor: 'pointer', fontFamily: 'var(--font-sans)', transition: 'all .12s',
+                }}>
+                {opt}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Instructions */}
       <div>
         <label style={lbl}>Instructions</label>
-        <input style={field} value={form.instructions} onChange={set('instructions')} placeholder="e.g. Before meals" />
+        <input style={field} value={form.instructions} onChange={setField('instructions')} placeholder="e.g. May cause drowsiness" />
       </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button type="button" className="btn btn-teal" style={{ flex: 1, justifyContent: 'center' }}
+
+      {/* English text for video */}
+      <div>
+        <label style={lbl}>Display Text (English)</label>
+        <input style={field}
+          value={form.text?.en ?? ''}
+          onChange={e => setForm(f => ({ ...f, text: { en: e.target.value } }))}
+          placeholder="e.g. Take Paracetamol after meals" />
+      </div>
+
+      {/* Buttons */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+        <button type="button" style={{
+          flex: 1, padding: '9px 0', borderRadius: 9, border: 'none',
+          background: accentColor, color: '#fff', fontSize: 13, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'var(--font-sans)',
+        }}
           onClick={() => {
             if (!form.medicine_name.trim()) return toast.error('Medicine name is required')
             onSave({ ...form, medicine_name: form.medicine_name.trim() })
@@ -323,6 +482,7 @@ export default function PharmacistPrescriptionDetail() {
   const [prescription, setPrescription] = useState<Prescription | null>(null)
   const [loading, setLoading] = useState(true)
   const [rendering, setRendering] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const [sending, setSending] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [importingIdx, setImportingIdx] = useState<number | null>(null)
@@ -440,7 +600,7 @@ export default function PharmacistPrescriptionDetail() {
     setRendering(true)
     try {
       await api.put(`/prescriptions/${prescription.id}/render`, { video_url: null })
-      toast.success('Prescription rendered!')
+      toast.success('Render job sent!')
       fetchPrescription()
     } catch {
       toast.error('Render failed')
@@ -574,22 +734,43 @@ export default function PharmacistPrescriptionDetail() {
                 {rendering ? 'Rendering…' : 'Render'}
               </button>
 
-              <button onClick={() => {
-                if (prescription.video_url) {
-                  const a = document.createElement('a'); a.href = prescription.video_url
-                  a.download = `rx-${prescription.patient_name}.mp4`; a.click()
-                } else toast.error('Render the prescription first')
-              }} style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
-                padding: '14px 8px', borderRadius: 10, border: 'none', cursor: 'pointer',
-                background: 'var(--teal)', color: '#fff', fontSize: 10, fontWeight: 700,
-                letterSpacing: '.4px', textTransform: 'uppercase', fontFamily: 'var(--font-sans)',
-              }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-                Download
+              <button
+                disabled={downloading}
+                onClick={async () => {
+                  if (!prescription.video_url) {
+                    toast.error('Video not ready yet — render the prescription first')
+                    return
+                  }
+                  setDownloading(true)
+                  try {
+                    const res = await api.get(`/prescriptions/${prescription.id}/download-video`)
+                    const { url, filename } = res.data.data
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = filename
+                    a.target = '_blank'
+                    a.click()
+                  } catch {
+                    toast.error('Download failed')
+                  } finally {
+                    setDownloading(false)
+                  }
+                }} style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
+                  padding: '14px 8px', borderRadius: 10, border: 'none',
+                  cursor: downloading ? 'not-allowed' : 'pointer',
+                  background: 'var(--teal)', color: '#fff', fontSize: 10, fontWeight: 700,
+                  letterSpacing: '.4px', textTransform: 'uppercase', fontFamily: 'var(--font-sans)',
+                  opacity: downloading ? .65 : 1,
+                }}>
+                {downloading
+                  ? <div style={{ width: 20, height: 20, border: '2px solid rgba(255,255,255,.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin .7s linear infinite' }} />
+                  : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                }
+                {downloading ? 'Downloading…' : 'Download'}
               </button>
 
               <button onClick={handleSend} disabled={sending || alreadySent} style={{
@@ -641,7 +822,8 @@ export default function PharmacistPrescriptionDetail() {
           {/* ── AI Extracted Data Panel ── */}
           {(() => {
             const ai = prescription.interpreted_data
-            if (!ai) return null
+            // Only show when OCR result has arrived from the result queue
+            if (!ai || !(ai as any).ocr_source) return null
             const extracted = ai.interpreted_data
             const extractedMeds = extracted?.medicines ?? []
             const hospital = extracted?.hospital_details
@@ -735,7 +917,17 @@ export default function PharmacistPrescriptionDetail() {
                       <div key={i} style={{ padding: 14, borderRadius: 10, background: 'rgba(99,102,241,.06)', border: '1.5px solid rgba(99,102,241,.25)' }}>
                         <p style={{ fontSize: 11, fontWeight: 600, color: 'rgb(79,70,229)', marginBottom: 10 }}>Edit medicine #{i + 1}</p>
                         <OcrMedicineForm
-                          initial={{ medicine_name: m.medicine_name, dosage: m.dosage ?? '', instructions: m.instructions ?? '', duration: m.duration ?? '' }}
+                          initial={{
+                            medicine_name: m.medicine_name,
+                            dosage:        m.dosage        ?? '',
+                            instructions:  m.instructions  ?? '',
+                            duration:      m.duration      ?? '',
+                            time_of_day:   Array.isArray((m as any).time_of_day)
+                              ? (m as any).time_of_day
+                              : (m as any).time_of_day ? String((m as any).time_of_day).split(',').map((s: string) => s.trim()) : [],
+                            with_food: (m as any).with_food ?? '',
+                            text: (m as any).text ?? { en: '' },
+                          }}
                           onSave={updated => handleOcrEdit(i, updated)}
                           onCancel={() => setOcrEditIdx(null)}
                         />
@@ -747,11 +939,36 @@ export default function PharmacistPrescriptionDetail() {
                           <span style={{ fontSize: 10, fontWeight: 700, color: 'rgb(79,70,229)' }}>{i + 1}</span>
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>{m.medicine_name}</p>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1px 12px' }}>
-                            {m.dosage      && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Dosage: <span style={{ color: 'var(--ink)' }}>{m.dosage}</span></span>}
-                            {m.duration    && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Duration: <span style={{ color: 'var(--ink)' }}>{m.duration}</span></span>}
+                          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginBottom: 4 }}>{m.medicine_name}</p>
+                          {/* Time of day chips */}
+                          {(() => {
+                            const times: string[] = Array.isArray((m as any).time_of_day)
+                              ? (m as any).time_of_day
+                              : (m as any).time_of_day ? String((m as any).time_of_day).split(',').map((s: string) => s.trim()).filter(Boolean) : []
+                            return times.length > 0 ? (
+                              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 4 }}>
+                                {times.map(t => (
+                                  <span key={t} style={{
+                                    fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
+                                    background: 'rgba(99,102,241,.12)', color: 'rgb(79,70,229)',
+                                    border: '1px solid rgba(99,102,241,.25)',
+                                  }}>{t}</span>
+                                ))}
+                                {(m as any).with_food && (
+                                  <span style={{
+                                    fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 20,
+                                    background: 'rgba(0,184,148,.1)', color: 'var(--teal-dark)',
+                                    border: '1px solid rgba(0,184,148,.2)',
+                                  }}>{(m as any).with_food}</span>
+                                )}
+                              </div>
+                            ) : null
+                          })()}
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px' }}>
+                            {m.dosage       && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Dosage: <span style={{ color: 'var(--ink)' }}>{m.dosage}</span></span>}
+                            {m.duration     && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Duration: <span style={{ color: 'var(--ink)' }}>{m.duration}</span></span>}
                             {m.instructions && <span style={{ fontSize: 11, color: 'var(--ink-light)', width: '100%' }}>Instructions: <span style={{ color: 'var(--ink)' }}>{m.instructions}</span></span>}
+                            {(m as any).text?.en && <span style={{ fontSize: 11, color: 'var(--ink-light)', width: '100%' }}>Text: <span style={{ color: 'var(--ink)' }}>{(m as any).text.en}</span></span>}
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
@@ -857,18 +1074,20 @@ export default function PharmacistPrescriptionDetail() {
             </div>
           )}
 
-          {/* Add medicine form */}
-          <div className="card" style={{ padding: '16px 18px' }}>
-            <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-light)', marginBottom: 14 }}>
-              {(prescription.interpreted_data?.medicines?.length ?? 0) === 0 ? 'Add First Medicine' : 'Add Another Medicine'}
-            </p>
-            <MedicineForm
-              prescriptionId={prescription.id}
-              initial={EMPTY_FORM}
-              submitLabel="Add Medicine"
-              onDone={fetchPrescription}
-            />
-          </div>
+          {/* Add medicine form — only shown when OCR has not arrived yet */}
+          {!(prescription.interpreted_data as any)?.ocr_source && (
+            <div className="card" style={{ padding: '16px 18px' }}>
+              <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-light)', marginBottom: 14 }}>
+                {(prescription.interpreted_data?.medicines?.length ?? 0) === 0 ? 'Add First Medicine' : 'Add Another Medicine'}
+              </p>
+              <MedicineForm
+                prescriptionId={prescription.id}
+                initial={EMPTY_FORM}
+                submitLabel="Add Medicine"
+                onDone={fetchPrescription}
+              />
+            </div>
+          )}
 
         </div>
       </div>

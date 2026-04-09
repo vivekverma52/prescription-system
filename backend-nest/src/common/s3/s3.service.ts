@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import * as path from 'path';
 import { AppError } from '../errors/app.error';
 
@@ -68,5 +69,15 @@ export class S3Service {
   /** Build the public HTTPS URL from a stored S3 key. */
   getObjectUrl(key: string): string {
     return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
+  }
+
+  /** Generate a pre-signed URL that forces a file download (valid for 5 minutes). */
+  async getPresignedDownloadUrl(key: string, downloadFilename: string, expiresIn = 300): Promise<string> {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ResponseContentDisposition: `attachment; filename="${downloadFilename}"`,
+    });
+    return getSignedUrl(this.s3, command, { expiresIn });
   }
 }

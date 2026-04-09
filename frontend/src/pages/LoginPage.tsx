@@ -86,7 +86,7 @@ export default function LoginPage() {
             <div style={{ width: 36, height: 36, borderRadius: 9, background: 'var(--teal)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <span style={{ color: '#fff', fontWeight: 700, fontSize: 13, letterSpacing: '-.5px' }}>Rx</span>
             </div>
-            <span style={{ color: '#fff', fontWeight: 600, fontSize: 15 }}>Medscript</span>
+            <span style={{ color: '#fff', fontWeight: 600, fontSize: 15 }}>Medi lingua Vani</span>
           </div>
           <p style={{ fontSize: 11, fontWeight: 500, letterSpacing: '1px', textTransform: 'uppercase', color: 'rgba(255,255,255,.4)', marginBottom: 14 }}>
             Trusted by clinics across India
@@ -117,7 +117,7 @@ export default function LoginPage() {
             <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <span style={{ color: '#fff', fontWeight: 700, fontSize: 12 }}>Rx</span>
             </div>
-            <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--ink)' }}>Medscript</span>
+            <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--ink)' }}>Medi lingua vani</span>
           </div>
 
           {/* ── Forgot / OTP / New password flow ── */}
@@ -238,7 +238,7 @@ export default function LoginPage() {
                   {mode === 'login' ? 'Welcome back' : 'Create account'}
                 </h1>
                 <p style={{ fontSize: 13, color: 'var(--ink-light)', marginTop: 4 }}>
-                  {mode === 'login' ? 'Sign in to your Medscript account' : 'Get started — it only takes a minute'}
+                  {mode === 'login' ? 'Sign in to your Medi lingua Vani account' : 'Get started — it only takes a minute'}
                 </p>
               </div>
 

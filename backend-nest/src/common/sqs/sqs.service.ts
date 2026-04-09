@@ -11,7 +11,8 @@ import {
 export class SqsService implements OnModuleDestroy {
   private readonly logger = new Logger(SqsService.name);
   private readonly sqs: SQSClient;
-  private polling = false;
+  /** Tracks active polling loops by queue URL */
+  private readonly activeQueues = new Map<string, boolean>();
 
   constructor(private readonly configService: ConfigService) {
     const region = this.configService.get<string>('AWS_REGION');
@@ -48,7 +49,11 @@ export class SqsService implements OnModuleDestroy {
       this.logger.warn('[SQS] Consumer queue URL not configured — skipping polling');
       return;
     }
-    this.polling = true;
+    if (this.activeQueues.has(queueUrl)) {
+      this.logger.warn(`[SQS] Already polling ${queueUrl} — skipping duplicate`);
+      return;
+    }
+    this.activeQueues.set(queueUrl, true);
     this.logger.log(`[SQS] Consumer polling started — queue: ${queueUrl}`);
     void this.pollLoop(queueUrl, handler);
   }
@@ -57,7 +62,7 @@ export class SqsService implements OnModuleDestroy {
     queueUrl: string,
     handler: (body: Record<string, unknown>) => Promise<void>,
   ): Promise<void> {
-    while (this.polling) {
+    while (this.activeQueues.get(queueUrl)) {
       try {
         const result = await this.sqs.send(
           new ReceiveMessageCommand({
@@ -83,8 +88,8 @@ export class SqsService implements OnModuleDestroy {
           }
         }
       } catch (err: any) {
-        if (this.polling) {
-          this.logger.error(`[SQS] Poll error: ${err.message} — retrying in 5s`);
+        if (this.activeQueues.get(queueUrl)) {
+          this.logger.error(`[SQS] Poll error on ${queueUrl}: ${err.message} — retrying in 5s`);
           await new Promise((r) => setTimeout(r, 5000));
         }
       }
@@ -92,7 +97,8 @@ export class SqsService implements OnModuleDestroy {
   }
 
   onModuleDestroy() {
-    this.polling = false;
-    this.logger.log('[SQS] Consumer polling stopped');
+    for (const key of this.activeQueues.keys()) this.activeQueues.set(key, false);
+    this.activeQueues.clear();
+    this.logger.log('[SQS] All consumer polling stopped');
   }
 }

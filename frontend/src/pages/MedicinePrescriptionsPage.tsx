@@ -8,6 +8,8 @@ interface Medicine {
   medicine_name: string
   generic_name: string
   medicine_image: string | null
+  medicine_image_2: string | null
+  medicine_image_3: string | null
   dosage_description: string
   common_usage: string
   alternative_medicines: string[]
@@ -22,9 +24,13 @@ const EMPTY_FORM = {
 
 type FormState = typeof EMPTY_FORM
 
+type ImageSlot = 1 | 2 | 3
+
 type ModalState = {
-  open: boolean; editing: Medicine | null; form: FormState
-  saving: boolean; imageFile: File | null; imagePreview: string | null
+  open: boolean; editing: Medicine | null; form: FormState; saving: boolean
+  imageFile: File | null; imagePreview: string | null
+  imageFile2: File | null; imagePreview2: string | null
+  imageFile3: File | null; imagePreview3: string | null
 }
 
 type ModalAction =
@@ -32,12 +38,15 @@ type ModalAction =
   | { type: 'OPEN_EDIT'; medicine: Medicine }
   | { type: 'CLOSE' }
   | { type: 'SET_FIELD'; key: keyof FormState; value: string }
-  | { type: 'SET_IMAGE'; file: File; preview: string }
-  | { type: 'CLEAR_IMAGE' }
+  | { type: 'SET_IMAGE'; slot: ImageSlot; file: File; preview: string }
+  | { type: 'CLEAR_IMAGE'; slot: ImageSlot }
   | { type: 'SET_SAVING'; value: boolean }
 
 const MODAL_CLOSED: ModalState = {
-  open: false, editing: null, form: EMPTY_FORM, saving: false, imageFile: null, imagePreview: null,
+  open: false, editing: null, form: EMPTY_FORM, saving: false,
+  imageFile: null, imagePreview: null,
+  imageFile2: null, imagePreview2: null,
+  imageFile3: null, imagePreview3: null,
 }
 
 function modalReducer(state: ModalState, action: ModalAction): ModalState {
@@ -45,8 +54,10 @@ function modalReducer(state: ModalState, action: ModalAction): ModalState {
     case 'OPEN_CREATE': return { ...MODAL_CLOSED, open: true }
     case 'OPEN_EDIT':
       return {
-        open: true, editing: action.medicine, saving: false, imageFile: null,
-        imagePreview: action.medicine.medicine_image || null,
+        open: true, editing: action.medicine, saving: false,
+        imageFile: null, imagePreview: action.medicine.medicine_image || null,
+        imageFile2: null, imagePreview2: action.medicine.medicine_image_2 || null,
+        imageFile3: null, imagePreview3: action.medicine.medicine_image_3 || null,
         form: {
           medicine_name: action.medicine.medicine_name,
           generic_name: action.medicine.generic_name,
@@ -56,12 +67,18 @@ function modalReducer(state: ModalState, action: ModalAction): ModalState {
           drug_category: action.medicine.drug_category,
         },
       }
-    case 'CLOSE':         return { ...MODAL_CLOSED }
-    case 'SET_FIELD':     return { ...state, form: { ...state.form, [action.key]: action.value } }
-    case 'SET_IMAGE':     return { ...state, imageFile: action.file, imagePreview: action.preview }
-    case 'CLEAR_IMAGE':   return { ...state, imageFile: null, imagePreview: null }
-    case 'SET_SAVING':    return { ...state, saving: action.value }
-    default:              return state
+    case 'CLOSE': return { ...MODAL_CLOSED }
+    case 'SET_FIELD': return { ...state, form: { ...state.form, [action.key]: action.value } }
+    case 'SET_IMAGE':
+      if (action.slot === 1) return { ...state, imageFile: action.file, imagePreview: action.preview }
+      if (action.slot === 2) return { ...state, imageFile2: action.file, imagePreview2: action.preview }
+      return { ...state, imageFile3: action.file, imagePreview3: action.preview }
+    case 'CLEAR_IMAGE':
+      if (action.slot === 1) return { ...state, imageFile: null, imagePreview: null }
+      if (action.slot === 2) return { ...state, imageFile2: null, imagePreview2: null }
+      return { ...state, imageFile3: null, imagePreview3: null }
+    case 'SET_SAVING': return { ...state, saving: action.value }
+    default: return state
   }
 }
 
@@ -99,17 +116,23 @@ export default function MedicinePrescriptionsPage() {
 
   const [modal, dispatch] = useReducer(modalReducer, MODAL_CLOSED)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef2 = useRef<HTMLInputElement>(null)
+  const fileInputRef3 = useRef<HTMLInputElement>(null)
   const [uploadingId, setUploadingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
     return () => {
       if (modal.imagePreview?.startsWith('blob:')) URL.revokeObjectURL(modal.imagePreview)
+      if (modal.imagePreview2?.startsWith('blob:')) URL.revokeObjectURL(modal.imagePreview2)
+      if (modal.imagePreview3?.startsWith('blob:')) URL.revokeObjectURL(modal.imagePreview3)
     }
-  }, [modal.imagePreview])
+  }, [modal.imagePreview, modal.imagePreview2, modal.imagePreview3])
 
   function closeModal() {
     if (modal.imagePreview?.startsWith('blob:')) URL.revokeObjectURL(modal.imagePreview)
+    if (modal.imagePreview2?.startsWith('blob:')) URL.revokeObjectURL(modal.imagePreview2)
+    if (modal.imagePreview3?.startsWith('blob:')) URL.revokeObjectURL(modal.imagePreview3)
     dispatch({ type: 'CLOSE' })
   }
 
@@ -149,10 +172,14 @@ export default function MedicinePrescriptionsPage() {
         savedId = data.data._id
         toast.success('Medicine added')
       }
-      if (modal.imageFile) {
+      const imageUploads: [File, string][] = []
+      if (modal.imageFile)  imageUploads.push([modal.imageFile,  'medicine_image'])
+      if (modal.imageFile2) imageUploads.push([modal.imageFile2, 'medicine_image_2'])
+      if (modal.imageFile3) imageUploads.push([modal.imageFile3, 'medicine_image_3'])
+      for (const [file, field] of imageUploads) {
         const fd = new FormData()
-        fd.append('image', modal.imageFile)
-        await api.post(`/medicine-prescriptions/${savedId}/image`, fd, { headers: { 'Content-Type': undefined } })
+        fd.append('image', file)
+        await api.post(`/medicine-prescriptions/${savedId}/image?field=${field}`, fd, { headers: { 'Content-Type': undefined } })
       }
       closeModal()
       fetchMedicines()
@@ -174,12 +201,12 @@ export default function MedicinePrescriptionsPage() {
     }
   }
 
-  async function handleImageUpload(id: string, file: File) {
-    setUploadingId(id)
+  async function handleImageUpload(id: string, file: File, field = 'medicine_image') {
+    setUploadingId(`${id}_${field}`)
     try {
       const fd = new FormData()
       fd.append('image', file)
-      await api.post(`/medicine-prescriptions/${id}/image`, fd, { headers: { 'Content-Type': undefined } })
+      await api.post(`/medicine-prescriptions/${id}/image?field=${field}`, fd, { headers: { 'Content-Type': undefined } })
       toast.success('Image uploaded')
       fetchMedicines()
     } catch {
@@ -261,19 +288,25 @@ export default function MedicinePrescriptionsPage() {
                     {m.common_usage}
                   </td>
                   <td>
-                    {m.medicine_image ? (
-                      <img src={m.medicine_image} alt={m.medicine_name}
-                        style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
-                    ) : (
-                      <label style={{ cursor: 'pointer' }}>
-                        <span style={{ fontSize: 12, color: 'var(--teal)', textDecoration: 'underline' }}>
-                          {uploadingId === m._id ? 'Uploading…' : 'Upload'}
-                        </span>
-                        <input type="file" accept="image/*" style={{ display: 'none' }}
-                          disabled={uploadingId === m._id}
-                          onChange={e => { const f = e.target.files?.[0]; if (f) handleImageUpload(m._id, f) }} />
-                      </label>
-                    )}
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {(['medicine_image', 'medicine_image_2', 'medicine_image_3'] as const).map((field, i) => {
+                        const url = m[field]
+                        const slotKey = `${m._id}_${field}`
+                        return url ? (
+                          <img key={field} src={url} alt={`${m.medicine_name} ${i + 1}`}
+                            style={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)' }} />
+                        ) : (
+                          <label key={field} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            width: 32, height: 32, borderRadius: 6, border: '1px dashed var(--border)', fontSize: 10,
+                            color: 'var(--teal)', background: 'var(--teal-light)' }}>
+                            {uploadingId === slotKey ? '…' : `+${i + 1}`}
+                            <input type="file" accept="image/*" style={{ display: 'none' }}
+                              disabled={uploadingId === slotKey}
+                              onChange={e => { const f = e.target.files?.[0]; if (f) handleImageUpload(m._id, f, field) }} />
+                          </label>
+                        )
+                      })}
+                    </div>
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: 8 }}>
@@ -370,54 +403,60 @@ export default function MedicinePrescriptionsPage() {
                   onChange={e => dispatch({ type: 'SET_FIELD', key: 'alternative_medicines', value: e.target.value })} />
               </div>
 
-              {/* Image upload */}
+              {/* Image upload — 3 slots */}
               <div>
-                <label style={lbl}>Medicine Image <span style={{ fontWeight: 400 }}>(optional)</span></label>
-                <input ref={fileInputRef} type="file" accept=".jpg,.jpeg,.png,.webp" style={{ display: 'none' }}
-                  onChange={e => {
-                    const f = e.target.files?.[0]
-                    if (!f) return
-                    if (modal.imagePreview?.startsWith('blob:')) URL.revokeObjectURL(modal.imagePreview)
-                    dispatch({ type: 'SET_IMAGE', file: f, preview: URL.createObjectURL(f) })
-                  }} />
-                {modal.imagePreview ? (
-                  <div style={{ border: '1px solid var(--teal)', borderRadius: 10, overflow: 'hidden', background: 'var(--teal-light)' }}>
-                    <img src={modal.imagePreview} alt="Preview" style={{ width: '100%', maxHeight: 130, objectFit: 'contain', padding: 8 }} />
-                    <div style={{ display: 'flex', borderTop: '1px solid var(--teal)' }}>
-                      <button type="button" onClick={() => fileInputRef.current?.click()}
-                        style={{ flex: 1, fontSize: 12, color: 'var(--teal)', background: 'var(--surface)', border: 'none', cursor: 'pointer', padding: '7px 0', fontFamily: 'var(--font-sans)' }}>
-                        Change
-                      </button>
-                      <button type="button"
-                        onClick={() => {
-                          if (modal.imagePreview?.startsWith('blob:')) URL.revokeObjectURL(modal.imagePreview)
-                          dispatch({ type: 'CLEAR_IMAGE' })
-                          if (fileInputRef.current) fileInputRef.current.value = ''
-                        }}
-                        style={{ flex: 1, fontSize: 12, color: 'var(--danger)', background: 'var(--surface)', border: 'none', borderLeft: '1px solid var(--teal)', cursor: 'pointer', padding: '7px 0', fontFamily: 'var(--font-sans)' }}>
-                        Remove
-                      </button>
+                <label style={lbl}>Medicine Images <span style={{ fontWeight: 400 }}>(optional)</span></label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                  {(
+                    [
+                      { slot: 1 as ImageSlot, ref: fileInputRef,  preview: modal.imagePreview,  label: 'Image 1' },
+                      { slot: 2 as ImageSlot, ref: fileInputRef2, preview: modal.imagePreview2, label: 'Image 2' },
+                      { slot: 3 as ImageSlot, ref: fileInputRef3, preview: modal.imagePreview3, label: 'Image 3' },
+                    ] as const
+                  ).map(({ slot, ref, preview, label }) => (
+                    <div key={slot}>
+                      <p style={{ fontSize: 10, color: 'var(--ink-light)', marginBottom: 4, textAlign: 'center' }}>{label}</p>
+                      <input ref={ref} type="file" accept=".jpg,.jpeg,.png,.webp" style={{ display: 'none' }}
+                        onChange={e => {
+                          const f = e.target.files?.[0]
+                          if (!f) return
+                          if (preview?.startsWith('blob:')) URL.revokeObjectURL(preview)
+                          dispatch({ type: 'SET_IMAGE', slot, file: f, preview: URL.createObjectURL(f) })
+                        }} />
+                      {preview ? (
+                        <div style={{ border: '1px solid var(--teal)', borderRadius: 8, overflow: 'hidden', background: 'var(--teal-light)' }}>
+                          <img src={preview} alt={label} style={{ width: '100%', height: 80, objectFit: 'contain', padding: 4 }} />
+                          <div style={{ display: 'flex', borderTop: '1px solid var(--teal)' }}>
+                            <button type="button" onClick={() => ref.current?.click()}
+                              style={{ flex: 1, fontSize: 11, color: 'var(--teal)', background: 'var(--surface)', border: 'none', cursor: 'pointer', padding: '5px 0', fontFamily: 'var(--font-sans)' }}>
+                              Change
+                            </button>
+                            <button type="button" onClick={() => {
+                              if (preview?.startsWith('blob:')) URL.revokeObjectURL(preview)
+                              dispatch({ type: 'CLEAR_IMAGE', slot })
+                              if (ref.current) ref.current.value = ''
+                            }} style={{ flex: 1, fontSize: 11, color: 'var(--danger)', background: 'var(--surface)', border: 'none', borderLeft: '1px solid var(--teal)', cursor: 'pointer', padding: '5px 0', fontFamily: 'var(--font-sans)' }}>
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button type="button" onClick={() => ref.current?.click()}
+                          style={{ width: '100%', border: '2px dashed var(--border)', borderRadius: 8, padding: '14px 0',
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                            background: 'none', cursor: 'pointer', transition: 'border-color .15s' }}
+                          onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--teal)')}
+                          onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)')}>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink-light)" strokeWidth="1.5">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                          </svg>
+                          <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Upload</span>
+                        </button>
+                      )}
                     </div>
-                  </div>
-                ) : (
-                  <button type="button" onClick={() => fileInputRef.current?.click()}
-                    style={{
-                      width: '100%', border: '2px dashed var(--border)', borderRadius: 10,
-                      padding: '20px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-                      background: 'none', cursor: 'pointer', transition: 'border-color .15s',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--teal)')}
-                    onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)')}
-                  >
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--ink-light)" strokeWidth="1.5">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                      <polyline points="17 8 12 3 7 8"/>
-                      <line x1="12" y1="3" x2="12" y2="15"/>
-                    </svg>
-                    <span style={{ fontSize: 12, color: 'var(--ink-light)' }}>Click to upload image</span>
-                    <span style={{ fontSize: 10, color: 'var(--ink-light)', opacity: .6 }}>JPG, PNG, WEBP up to 10MB</span>
-                  </button>
-                )}
+                  ))}
+                </div>
               </div>
 
               <div style={{ display: 'flex', gap: 10, paddingTop: 4, position: 'sticky', bottom: 0, background: 'var(--surface)', paddingBottom: 2 }}>

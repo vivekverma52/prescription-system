@@ -17,6 +17,12 @@ export class MedicinePrescription {
   @Prop({ default: null })
   medicine_image: string;
 
+  @Prop({ default: null })
+  medicine_image_2: string;
+
+  @Prop({ default: null })
+  medicine_image_3: string;
+
   @Prop({ required: true, trim: true })
   dosage_description: string;
 
