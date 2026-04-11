@@ -168,7 +168,7 @@ export default function PharmacistDashboard() {
               <tr
                 key={p.id}
                 style={{ cursor: 'pointer', background: p.status === 'UPLOADED' && isNew(p.created_at) ? 'rgba(217,119,6,.04)' : undefined }}
-                onClick={() => navigate(`/pharmacist/prescriptions/${p.access_token}`)}
+                onClick={() => navigate(`/pharmacist/prescriptions/${p.id}`)}
               >
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>

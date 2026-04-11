@@ -51,7 +51,7 @@ function generatePatientUid(orgId: string | null, hospitalId: string | null, doc
   return `${seg(orgId, 'NORG')}-${seg(hospitalId, 'NOHOSP')}-${seg(doctorId, 'NODOC')}-${seg(rxId, rxId)}-${date}`;
 }
 
-@Injectable()
+@Injectable()                               
 export class PrescriptionService implements OnModuleInit {
   private readonly logger = new Logger(PrescriptionService.name);
 
@@ -353,10 +353,11 @@ export class PrescriptionService implements OnModuleInit {
   }
 
   async saveInterpretedData(id: string, data: any) {
-    const prescription = await this.prescriptionModel.findOne({ id }).lean();
+    const prescription = await this.prescriptionModel
+      .findOne({ $or: [{ id }, { access_token: id }] }).lean();
     if (!prescription) throw AppError.notFound('Prescription');
 
-    await this.prescriptionModel.updateOne({ id }, { $set: { interpreted_data: data } });
+    await this.prescriptionModel.updateOne({ id: prescription.id }, { $set: { interpreted_data: data } });
     return { message: 'Interpreted data saved' };
   }
 

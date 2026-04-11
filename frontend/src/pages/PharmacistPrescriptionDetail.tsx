@@ -20,17 +20,21 @@ interface ExtractedMedicine {
   dosage?: string
   duration?: string
   instructions?: string
+  time_of_day?: string | string[]
+  with_food?: string
+  text?: { en?: string }
 }
 
 interface InterpretedData {
   medicines?: Medicine[]
+  ocr_source?: boolean
   interpreted_data?: {
     medicines?: ExtractedMedicine[]
     doctor_details?: { name?: string; qualifications?: string; contact?: string }
     hospital_details?: { name?: string; address?: string }
     patient_details?: { name?: string; phone?: string; date?: string }
   }
-  metadata?: { language?: string; processed_at?: string }
+  metadata?: { processed_at?: string }
   status?: string
 }
 
@@ -297,8 +301,9 @@ function OcrMedicineForm({ initial, onSave, onCancel }: {
   })
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showSug, setShowSug] = useState(false)
-  const nameRef = useRef<HTMLInputElement>(null)
-  const sugRef  = useRef<HTMLDivElement>(null)
+  const nameRef    = useRef<HTMLInputElement>(null)
+  const sugRef     = useRef<HTMLDivElement>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -309,15 +314,18 @@ function OcrMedicineForm({ initial, onSave, onCancel }: {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const searchMedicines = async (q: string) => {
+  const searchMedicines = (q: string) => {
     setForm(f => ({ ...f, medicine_name: q }))
+    if (debounceRef.current) clearTimeout(debounceRef.current)
     if (q.length < 1) { setSuggestions([]); setShowSug(false); return }
-    try {
-      const res = await api.get(`/prescriptions/medicines/search?q=${encodeURIComponent(q)}`)
-      const data: string[] = res.data.data ?? []
-      setSuggestions(data)
-      setShowSug(data.length > 0)
-    } catch { setSuggestions([]) }
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await api.get(`/prescriptions/medicines/search?q=${encodeURIComponent(q)}`)
+        const data: string[] = res.data.data ?? []
+        setSuggestions(data)
+        setShowSug(data.length > 0)
+      } catch { setSuggestions([]) }
+    }, 300)
   }
 
   const setField = (k: 'dosage' | 'instructions' | 'duration' | 'with_food') =>
@@ -484,7 +492,6 @@ export default function PharmacistPrescriptionDetail() {
   const [rendering, setRendering] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [sending, setSending] = useState(false)
-  const [editId, setEditId] = useState<string | null>(null)
   const [importingIdx, setImportingIdx] = useState<number | null>(null)
   const [importedIdxs, setImportedIdxs] = useState<Set<number>>(new Set())
   const [ocrEditIdx, setOcrEditIdx] = useState<number | null>(null)
@@ -541,24 +548,30 @@ export default function PharmacistPrescriptionDetail() {
   const saveOcrMedicines = async (updatedMeds: typeof EMPTY_OCR[]) => {
     setOcrSaving(true)
     try {
-      const current = prescription!.interpreted_data as any
-      await api.put(`/prescriptions/${id}/interpreted-data`, {
+      // Always use prescription.id (UUID), never the URL param which may be access_token
+      const rxId = prescription!.id
+      const current = (prescription!.interpreted_data as any) ?? {}
+      const payload = {
         ...current,
         interpreted_data: {
-          ...(current?.interpreted_data ?? {}),
+          ...(current.interpreted_data ?? {}),
           medicines: updatedMeds,
         },
-      })
+      }
+      await api.put(`/prescriptions/${rxId}/interpreted-data`, payload)
       await fetchPrescription()
-    } catch {
-      toast.error('Failed to save')
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to save medicines')
     } finally {
       setOcrSaving(false)
     }
   }
 
+  const getOcrMeds = () =>
+    [...((prescription!.interpreted_data?.interpreted_data?.medicines ?? []) as ExtractedMedicine[])]
+
   const handleOcrEdit = async (idx: number, updated: typeof EMPTY_OCR) => {
-    const meds = [...((prescription!.interpreted_data as any)?.interpreted_data?.medicines ?? [])]
+    const meds = getOcrMeds()
     meds[idx] = updated
     await saveOcrMedicines(meds)
     setOcrEditIdx(null)
@@ -567,31 +580,21 @@ export default function PharmacistPrescriptionDetail() {
 
   const handleOcrDelete = async (idx: number, name: string) => {
     if (!confirm(`Remove "${name}"?`)) return
-    const meds = [...((prescription!.interpreted_data as any)?.interpreted_data?.medicines ?? [])]
+    const meds = getOcrMeds()
     meds.splice(idx, 1)
     await saveOcrMedicines(meds)
     toast.success('Medicine removed')
   }
 
   const handleOcrAdd = async (newMed: typeof EMPTY_OCR) => {
-    const meds = [...((prescription!.interpreted_data as any)?.interpreted_data?.medicines ?? [])]
+    const meds = getOcrMeds()
     meds.push(newMed)
     await saveOcrMedicines(meds)
     setShowAddOcr(false)
+    setOcrEditIdx(null)
     toast.success(`${newMed.medicine_name} added`)
   }
 
-  const handleDelete = async (medicineId: string, name: string) => {
-    if (!confirm(`Remove "${name}"?`)) return
-    try {
-      await api.delete(`/prescriptions/${id}/medicines/${medicineId}`)
-      toast.success('Medicine removed')
-      if (editId === medicineId) setEditId(null)
-      fetchPrescription()
-    } catch {
-      toast.error('Failed to remove medicine')
-    }
-  }
 
   const handleRender = async () => {
     const pharmacistMeds = prescription?.interpreted_data?.medicines?.length ?? 0
@@ -822,8 +825,8 @@ export default function PharmacistPrescriptionDetail() {
           {/* ── AI Extracted Data Panel ── */}
           {(() => {
             const ai = prescription.interpreted_data
-            // Only show when OCR result has arrived from the result queue
-            if (!ai || !(ai as any).ocr_source) return null
+            // Show only when the OCR SQS consumer has processed this prescription
+            if (!ai || !ai.ocr_source) return null
             const extracted = ai.interpreted_data
             const extractedMeds = extracted?.medicines ?? []
             const hospital = extracted?.hospital_details
@@ -922,11 +925,11 @@ export default function PharmacistPrescriptionDetail() {
                             dosage:        m.dosage        ?? '',
                             instructions:  m.instructions  ?? '',
                             duration:      m.duration      ?? '',
-                            time_of_day:   Array.isArray((m as any).time_of_day)
-                              ? (m as any).time_of_day
-                              : (m as any).time_of_day ? String((m as any).time_of_day).split(',').map((s: string) => s.trim()) : [],
-                            with_food: (m as any).with_food ?? '',
-                            text: (m as any).text ?? { en: '' },
+                            time_of_day:   Array.isArray(m.time_of_day)
+                              ? m.time_of_day
+                              : m.time_of_day ? String(m.time_of_day).split(',').map(s => s.trim()).filter(Boolean) : [],
+                            with_food: m.with_food ?? '',
+                            text: m.text ?? { en: '' },
                           }}
                           onSave={updated => handleOcrEdit(i, updated)}
                           onCancel={() => setOcrEditIdx(null)}
@@ -942,9 +945,9 @@ export default function PharmacistPrescriptionDetail() {
                           <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginBottom: 4 }}>{m.medicine_name}</p>
                           {/* Time of day chips */}
                           {(() => {
-                            const times: string[] = Array.isArray((m as any).time_of_day)
-                              ? (m as any).time_of_day
-                              : (m as any).time_of_day ? String((m as any).time_of_day).split(',').map((s: string) => s.trim()).filter(Boolean) : []
+                            const times: string[] = Array.isArray(m.time_of_day)
+                              ? m.time_of_day
+                              : m.time_of_day ? String(m.time_of_day).split(',').map(s => s.trim()).filter(Boolean) : []
                             return times.length > 0 ? (
                               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 4 }}>
                                 {times.map(t => (
@@ -954,12 +957,12 @@ export default function PharmacistPrescriptionDetail() {
                                     border: '1px solid rgba(99,102,241,.25)',
                                   }}>{t}</span>
                                 ))}
-                                {(m as any).with_food && (
+                                {m.with_food && (
                                   <span style={{
                                     fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 20,
                                     background: 'rgba(0,184,148,.1)', color: 'var(--teal-dark)',
                                     border: '1px solid rgba(0,184,148,.2)',
-                                  }}>{(m as any).with_food}</span>
+                                  }}>{m.with_food}</span>
                                 )}
                               </div>
                             ) : null
@@ -968,12 +971,24 @@ export default function PharmacistPrescriptionDetail() {
                             {m.dosage       && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Dosage: <span style={{ color: 'var(--ink)' }}>{m.dosage}</span></span>}
                             {m.duration     && <span style={{ fontSize: 11, color: 'var(--ink-light)' }}>Duration: <span style={{ color: 'var(--ink)' }}>{m.duration}</span></span>}
                             {m.instructions && <span style={{ fontSize: 11, color: 'var(--ink-light)', width: '100%' }}>Instructions: <span style={{ color: 'var(--ink)' }}>{m.instructions}</span></span>}
-                            {(m as any).text?.en && <span style={{ fontSize: 11, color: 'var(--ink-light)', width: '100%' }}>Text: <span style={{ color: 'var(--ink)' }}>{(m as any).text.en}</span></span>}
+                            {m.text?.en     && <span style={{ fontSize: 11, color: 'var(--ink-light)', width: '100%' }}>Text: <span style={{ color: 'var(--ink)' }}>{m.text.en}</span></span>}
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                          <button onClick={() => { setOcrEditIdx(i); setShowAddOcr(false) }} className="btn btn-ghost btn-sm" disabled={ocrSaving} style={{ fontSize: 11 }}>Edit</button>
-                          <button onClick={() => handleOcrDelete(i, m.medicine_name)} className="btn btn-ghost btn-sm" disabled={ocrSaving} style={{ fontSize: 11, color: '#ef4444' }}>✕</button>
+                          <button
+                            onClick={() => { setOcrEditIdx(i); setShowAddOcr(false) }}
+                            className="btn btn-ghost btn-sm"
+                            disabled={ocrSaving}
+                            style={{ fontSize: 11 }}>
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleOcrDelete(i, m.medicine_name)}
+                            className="btn btn-ghost btn-sm"
+                            disabled={ocrSaving}
+                            style={{ fontSize: 11, color: '#ef4444' }}>
+                            {ocrSaving ? '…' : '✕'}
+                          </button>
                         </div>
                       </div>
                     )
@@ -999,95 +1014,6 @@ export default function PharmacistPrescriptionDetail() {
             )
           })()}
 
-          {/* Medicines list */}
-          {(prescription.interpreted_data?.medicines?.length ?? 0) > 0 && (
-            <div className="card" style={{ padding: '16px 18px' }}>
-              <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-light)', marginBottom: 12 }}>
-                Medicines
-                <span style={{ marginLeft: 6, background: 'var(--teal-light)', color: 'var(--teal-dark)', borderRadius: 20, padding: '1px 7px', fontSize: 10, fontWeight: 700 }}>
-                  {prescription.interpreted_data!.medicines!.length}
-                </span>
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {prescription.interpreted_data!.medicines!.map((med, i) => (
-                  editId === med.id ? (
-                    // ── Inline edit ──
-                    <div key={med.id} style={{ padding: '14px', borderRadius: 12, background: 'var(--teal-light)', border: '1.5px solid rgba(0,184,148,.25)' }}>
-                      <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--teal-dark)', marginBottom: 12 }}>Edit medicine #{i + 1}</p>
-                      <MedicineForm
-                        prescriptionId={prescription.id}
-                        initial={{
-                          id: med.id,
-                          name: med.name,
-                          quantity: med.quantity,
-                          frequency: med.frequency.split(',').map(f => f.trim()).filter(Boolean),
-                          course: med.course,
-                          description: med.description ?? '',
-                        }}
-                        submitLabel="Save Changes"
-                        onDone={() => { setEditId(null); fetchPrescription() }}
-                        onCancel={() => setEditId(null)}
-                      />
-                    </div>
-                  ) : (
-                    // ── Display row ──
-                    <div key={med.id} style={{ display: 'flex', gap: 10, padding: '11px 13px', borderRadius: 10, background: 'var(--cell)', border: '1px solid var(--border)' }}>
-                      <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--teal-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--teal-dark)' }}>{i + 1}</span>
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginBottom: 4 }}>{med.name}</p>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 14px' }}>
-                          {[['Qty', med.quantity], ['Freq', med.frequency], ['Course', med.course]].map(([k, v]) => (
-                            <span key={k} style={{ fontSize: 11, color: 'var(--ink-light)' }}>
-                              {k}: <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{v}</span>
-                            </span>
-                          ))}
-                          {med.description && (
-                            <span style={{ fontSize: 11, color: 'var(--ink-light)', width: '100%', marginTop: 1 }}>
-                              Note: <span style={{ color: 'var(--ink)' }}>{med.description}</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 2, flexShrink: 0, alignSelf: 'flex-start' }}>
-                        <button title="Edit" onClick={() => setEditId(med.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 5, borderRadius: 6, color: 'var(--ink-light)', display: 'flex' }}
-                          onMouseEnter={e => (e.currentTarget.style.background = 'var(--cream-dark)')}
-                          onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                          </svg>
-                        </button>
-                        <button title="Remove" onClick={() => handleDelete(med.id, med.name)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 5, borderRadius: 6, color: 'var(--ink-light)', display: 'flex' }}
-                          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239,68,68,.08)'; e.currentTarget.style.color = '#EF4444' }}
-                          onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--ink-light)' }}>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  )
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Add medicine form — only shown when OCR has not arrived yet */}
-          {!(prescription.interpreted_data as any)?.ocr_source && (
-            <div className="card" style={{ padding: '16px 18px' }}>
-              <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.6px', textTransform: 'uppercase', color: 'var(--ink-light)', marginBottom: 14 }}>
-                {(prescription.interpreted_data?.medicines?.length ?? 0) === 0 ? 'Add First Medicine' : 'Add Another Medicine'}
-              </p>
-              <MedicineForm
-                prescriptionId={prescription.id}
-                initial={EMPTY_FORM}
-                submitLabel="Add Medicine"
-                onDone={fetchPrescription}
-              />
-            </div>
-          )}
 
         </div>
       </div>

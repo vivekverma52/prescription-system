@@ -41,7 +41,7 @@ export class HospitalService {
       [orgId],
     );
     if (orgRows.length === 0) throw AppError.notFound('Organization');
-    const limit = orgRows[0].max_hospitals ?? 1;
+    const limit = orgRows[0].max_hospitals ?? 0;
     if (limit === 0) return; // 0 = unlimited
     const [[{ count }]]: any = await this.pool.execute('SELECT COUNT(*) AS count FROM hospitals WHERE org_id = ?', [orgId]);
     if (count >= limit) {

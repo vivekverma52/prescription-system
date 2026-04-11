@@ -183,39 +183,66 @@ export default function NewPrescriptionPage() {
             {/* File upload */}
             <div style={{ marginBottom: 12 }}>
               <label style={lbl}>Upload Prescription Image</label>
-              <div style={{
-                border: `2px dashed ${preview ? 'var(--teal)' : 'var(--border)'}`,
-                borderRadius: 12, padding: 16, textAlign: 'center',
-                background: preview ? 'var(--teal-light)' : 'transparent',
-                position: 'relative', transition: 'border-color .15s, background .15s',
-              }}>
-                {preview ? (
-                  <img src={preview} alt="Preview" style={{ maxHeight: 180, margin: '0 auto', borderRadius: 8, objectFit: 'contain', display: 'block' }} />
-                ) : (
-                  <div style={{ padding: '16px 0' }}>
-                    <svg style={{ margin: '0 auto 8px', color: 'var(--ink-light)' }} width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                      <polyline points="17 8 12 3 7 8"/>
-                      <line x1="12" y1="3" x2="12" y2="15"/>
+
+              {/* Hidden inputs */}
+              <input id="file-camera" type="file" accept="image/*" capture="environment" onChange={handleFile}
+                style={{ display: 'none' }} />
+              <input id="file-gallery" type="file" accept="image/*,.pdf" onChange={handleFile}
+                style={{ display: 'none' }} />
+
+              {!file ? (
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {/* Take Photo */}
+                  <label htmlFor="file-camera" style={{
+                    flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                    gap: 8, padding: '18px 12px', border: '2px dashed var(--border)', borderRadius: 12,
+                    cursor: 'pointer', background: 'transparent', transition: 'border-color .15s',
+                  }}>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" strokeWidth="1.8">
+                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                      <circle cx="12" cy="13" r="4"/>
                     </svg>
-                    <p style={{ fontSize: 13, color: 'var(--ink-light)', marginBottom: 3 }}>Choose file or drag here</p>
-                    <p style={{ fontSize: 11, color: 'var(--ink-light)', opacity: .6 }}>JPG, PNG, PDF up to 10MB</p>
-                  </div>
-                )}
-                {!preview && (
-                  <input type="file" accept="image/*,.pdf" onChange={handleFile}
-                    style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-                )}
-              </div>
-              {file && (
-                <p style={{ fontSize: 11, color: 'var(--teal)', marginTop: 5 }}>✓ {file.name}</p>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--teal)' }}>Take Photo</span>
+                    <span style={{ fontSize: 10, color: 'var(--ink-light)', opacity: .7 }}>Use camera</span>
+                  </label>
+
+                  {/* Choose from Gallery / File */}
+                  <label htmlFor="file-gallery" style={{
+                    flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                    gap: 8, padding: '18px 12px', border: '2px dashed var(--border)', borderRadius: 12,
+                    cursor: 'pointer', background: 'transparent', transition: 'border-color .15s',
+                  }}>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--ink-light)" strokeWidth="1.8">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                      <circle cx="8.5" cy="8.5" r="1.5"/>
+                      <polyline points="21 15 16 10 5 21"/>
+                    </svg>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--ink-light)' }}>Gallery / File</span>
+                    <span style={{ fontSize: 10, color: 'var(--ink-light)', opacity: .7 }}>JPG, PNG, PDF</span>
+                  </label>
+                </div>
+              ) : (
+                <div style={{
+                  border: '2px dashed var(--teal)', borderRadius: 12, padding: 16,
+                  textAlign: 'center', background: 'var(--teal-light)',
+                }}>
+                  {preview ? (
+                    <img src={preview} alt="Preview" style={{ maxHeight: 180, margin: '0 auto', borderRadius: 8, objectFit: 'contain', display: 'block' }} />
+                  ) : (
+                    <p style={{ fontSize: 13, color: 'var(--teal)' }}>✓ {file.name}</p>
+                  )}
+                </div>
               )}
-              {preview && (
-                <button type="button"
-                  onClick={() => { setFile(null); if (preview) URL.revokeObjectURL(preview); setPreview(null) }}
-                  style={{ fontSize: 11, color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', marginTop: 6 }}>
-                  Remove image
-                </button>
+
+              {file && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+                  <p style={{ fontSize: 11, color: 'var(--teal)' }}>✓ {file.name}</p>
+                  <button type="button"
+                    onClick={() => { setFile(null); if (preview) URL.revokeObjectURL(preview); setPreview(null) }}
+                    style={{ fontSize: 11, color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>
+                    Remove
+                  </button>
+                </div>
               )}
             </div>
 
